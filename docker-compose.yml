@@ -1,47 +1,101 @@
-version: "3"
 services:
-  iptv-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    healthcheck:
-      test: wget --no-verbose --tries=1 --spider https://1.1.1.1 || exit 1
-      interval: 5m # Default: 30s
-      timeout: 15s # Default: 30s
-      retries: 1 # Default: 3
-      start_period: 5s # Default: 0s
-      start_interval: 10s # Default: 5s
-    volumes:
-      # If your are using local m3u file instead of m3u remote file
-      # put your m3u file in this folder
-      - ./iptv:/root/iptv
-    container_name: "iptv-proxy"
-    restart: on-failure
+  stream-share:
+    image: lucasduport/stream-share:latest
+    restart: unless-stopped
     ports:
-       # have to be the same as ENV variable PORT
-      - 8080:8080
+      - "8080:8080"
     environment:
-      # if you are using m3u remote file
-      # M3U_URL: https://example.com/iptvfile.m3u
-      M3U_URL: /root/iptv/iptv.m3u
-      # Port to expose the IPTVs endpoints
-      PORT: 8080
-      # Hostname or IP to expose the IPTVs endpoints (for machine not for docker)
-      HOSTNAME: localhost
-      GIN_MODE: release
-      ## Xtream-code proxy configuration
-      XTREAM_USER: xtream_user
-      XTREAM_PASSWORD: xtream_password
-      XTREAM_BASE_URL: "http://example.tv:8080"
-      ##### UNSAFE AUTH TODO ADD REAL AUTH
-      #will be used for m3u and xtream auth poxy
-      USER: test
-      PASSWORD: testpassword
-      # ---- Additional debugging options ----
-      #DEBUG_LOGGING: true
-      # Save the IPTV Provider responses to this location
-      #CACHE_FOLDER: /root/iptv/cache/
-      # Default to using Advanced parsing. Disable it with:
-      #USE_XTREAM_LEGACY_PARSING: true
-      # ERROR_DETAIL_LEVEL values: none, simple (default), full
-      #ERROR_DETAIL_LEVEL: simple
+      # M3U Configuration
+      M3U_URL: ""                      # URL or path to M3U file
+      M3U_FILE_NAME: "file.m3u"        # Name of the generated M3U file
+      M3U_CACHE_EXPIRATION: "24"       # Cache expiration in hours
+
+      # Server Configuration
+      PORT: 8080                       # Port to listen on
+      ADVERTISED_PORT: 443             # Port to advertise in URLs (for reverse proxy)
+      HOSTNAME: ""                     # Hostname to use in URLs
+      REVERSE_PROXY: "true"            # Whether behind a reverse proxy (for correct URL generation)
+      GIN_MODE: "release"              # Gin mode (debug or release) - read by Gin automatically if set
+      HTTPS: "1"                       # Use HTTPS in generated URLs
+      CUSTOM_ENDPOINT: ""              # Custom endpoint path
+      CUSTOM_ID: ""                    # Custom ID for URL paths
+      
+      # Xtream Configuration
+      XTREAM_USER: ""                  # Xtream API username
+      XTREAM_PASSWORD: ""              # Xtream API password
+      XTREAM_BASE_URL: ""              # Xtream API base URL
+      XTREAM_API_GET: "false"          # Generate get.php from API
+
+      # Legacy authentication (when LDAP is disabled)
+      USER: ""                         # Username for basic auth
+      PASSWORD: ""                     # Password for basic auth
+      
+      # Debug options
+      DEBUG_LOGGING: "true"            # Enable debug logging
+      CACHE_FOLDER: "/root"      # Folder to save responses
+
+      # LDAP Authentication
+      LDAP_ENABLED: "true"             # Enable LDAP authentication
+      LDAP_SERVER: ""                  # LDAP server URL (ldap://server:389)
+      LDAP_BASE_DN: "ou=people,dc=example,dc=com"  # Base DN for user search
+      LDAP_BIND_DN: "uid=admin,ou=people,dc=example,dc=com"  # Bind DN for service account
+      LDAP_BIND_PASSWORD: ""           # Bind password for service account
+      LDAP_USER_ATTRIBUTE: "uid"       # LDAP attribute containing username
+      LDAP_GROUP_ATTRIBUTE: "memberOf" # LDAP attribute for group membership
+      LDAP_REQUIRED_GROUP: "iptv"      # Group required for authentication
+
+      # Database Configuration
+      DB_HOST: "db"                    # Postgres hostname 
+      DB_PORT: "5432"                  # Postgres port
+      DB_NAME: "iptvproxy"             # Postgres database name
+      DB_USER: "iptvproxy"             # Postgres username
+      DB_PASSWORD: "iptvproxypass"     # Postgres password
+
+      # Discord Bot Configuration
+      DISCORD_BOT_TOKEN: ""            # Discord bot token
+      DISCORD_ADMIN_ROLE_ID: ""        # Discord role ID for admin commands
+      DISCORD_API_URL: ""              # API URL for Discord bot (defaults to hostname)
+
+      # Multiplexing and Session Management
+      SESSION_TIMEOUT_MINUTES: "30"    # User session timeout in minutes
+      STREAM_TIMEOUT_MINUTES: "2"      # Stream timeout (after all users disconnect)
+      TEMP_LINK_HOURS: "24"            # Temporary download link expiration in hours
+
+    volumes:
+      - ss_config:/root     # Persistent configuration storage (config, state)
+
+    depends_on:
+      - db
+      
+  # PostgreSQL database
+  db:
+    image: postgres:14-alpine
+    container_name: stream-share-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: iptvproxy
+      POSTGRES_USER: iptvproxy
+      POSTGRES_PASSWORD: iptvproxypass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Uncomment to expose PostgreSQL port for external access
+    # ports:
+    #  - "5432:5432"
+    
+  # Adminer for database management (optional)
+  # adminer:
+  #   image: adminer
+  #   container_name: stream-share-adminer
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8081:8080"
+  #   environment:
+  #     ADMINER_DEFAULT_SERVER: db
+  #   depends_on:
+  #     - db
+
+volumes:
+  ss_config:
+  ss_data:
+  postgres_data:

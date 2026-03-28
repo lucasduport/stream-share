@@ -3,24 +3,34 @@ name: CI
 on:
   pull_request:
   push:
+    branches:
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v2
-      with:
-        version: latest
-    - name: Run tests and attempt building
-      run: |
-        export PATH=$(go env GOPATH)/bin:$PATH
-        go test -mod vendor -v -race ./...
-        go build -mod vendor
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.17'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Run tests and build
+        run: |
+          go test -mod vendor -v -race ./...
+          go build -mod vendor
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag iptv-proxy:ci-build
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build . --file Dockerfile --tag stream-share:ci-build

@@ -1,7 +1,9 @@
-project_name: iptv-proxy
+version: 2
+
+project_name: stream-share
 
 builds:
-  - binary: iptv-proxy
+  - binary: stream-share
     env:
       - CGO_ENABLED=0
     flags:
@@ -24,16 +26,16 @@ archives:
 
 release:
   github:
-    owner: pierre-emmanuelJ
-    name: iptv-proxy
+    owner: lucasduport
+    name: stream-share
   draft: false
 
 nfpms:
   -
-   vendor: Pierre-Emmanuel Jacquier
-   homepage: https://github.com/pierre-emmanuelJ/iptv-proxy
-   maintainer: Pierre-Emmanuel <pierre-emmanuel.jacquier@epitech.eu>
-   description: Reverse proxy on iptv m3u file
+   vendor: Lucas Duport
+   homepage: https://github.com/lucasduport/stream-share
+   maintainer: Lucas Duport <lucas.duport@epita.fr>
+   description: IPTV Proxy with LDAP support
    license: Apache 2.0
    formats:
      - deb
@@ -41,19 +43,19 @@ nfpms:
 
 dockers:
   - image_templates:
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:{{ .Tag }}-arm64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:v{{ .Major }}-arm64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:v{{ .Major }}.{{ .Minor }}-arm64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:latest-arm64"
-    - "pierro777/iptv-proxy:{{ .Tag }}-arm64"
-    - "pierro777/iptv-proxy:v{{ .Major }}-arm64"
-    - "pierro777/iptv-proxy:v{{ .Major }}.{{ .Minor }}-arm64"
-    - "pierro777/iptv-proxy:latest-arm64"
+    - "ghcr.io/lucasduport/stream-share:{{ .Tag }}-arm64"
+    - "ghcr.io/lucasduport/stream-share:v{{ .Major }}-arm64"
+    - "ghcr.io/lucasduport/stream-share:v{{ .Major }}.{{ .Minor }}-arm64"
+    - "ghcr.io/lucasduport/stream-share:latest-arm64"
+    - "lucasduport/stream-share:{{ .Tag }}-arm64"
+    - "lucasduport/stream-share:v{{ .Major }}-arm64"
+    - "lucasduport/stream-share:v{{ .Major }}.{{ .Minor }}-arm64"
+    - "lucasduport/stream-share:latest-arm64"
     use: buildx
     goos: linux
     goarch: arm64
     ids:
-    - iptv-proxy
+    - stream-share
     build_flag_templates:
     - "--platform=linux/arm64/v8"
     - "--label=org.opencontainers.image.created={{.Date}}"
@@ -64,27 +66,27 @@ dockers:
     dockerfile: .Dockerfile.goreleaser
 
   - image_templates:
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:{{ .Tag }}-amd64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:v{{ .Major }}-amd64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:v{{ .Major }}.{{ .Minor }}-amd64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:latest-amd64"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:{{ .Tag }}"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:v{{ .Major }}"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:v{{ .Major }}.{{ .Minor }}"
-    - "docker.pkg.github.com/pierre-emmanuelj/iptv-proxy/iptv-proxy:latest"
-    - "pierro777/iptv-proxy:{{ .Tag }}-amd64"
-    - "pierro777/iptv-proxy:v{{ .Major }}-amd64"
-    - "pierro777/iptv-proxy:v{{ .Major }}.{{ .Minor }}-amd64"
-    - "pierro777/iptv-proxy:latest-amd64"
-    - "pierro777/iptv-proxy:{{ .Tag }}"
-    - "pierro777/iptv-proxy:v{{ .Major }}"
-    - "pierro777/iptv-proxy:v{{ .Major }}.{{ .Minor }}"
-    - "pierro777/iptv-proxy:latest"
+    - "ghcr.io/lucasduport/stream-share:{{ .Tag }}-amd64"
+    - "ghcr.io/lucasduport/stream-share:v{{ .Major }}-amd64"
+    - "ghcr.io/lucasduport/stream-share:v{{ .Major }}.{{ .Minor }}-amd64"
+    - "ghcr.io/lucasduport/stream-share:latest-amd64"
+    - "ghcr.io/lucasduport/stream-share:{{ .Tag }}"
+    - "ghcr.io/lucasduport/stream-share:v{{ .Major }}"
+    - "ghcr.io/lucasduport/stream-share:v{{ .Major }}.{{ .Minor }}"
+    - "ghcr.io/lucasduport/stream-share:latest"
+    - "lucasduport/stream-share:{{ .Tag }}-amd64"
+    - "lucasduport/stream-share:v{{ .Major }}-amd64"
+    - "lucasduport/stream-share:v{{ .Major }}.{{ .Minor }}-amd64"
+    - "lucasduport/stream-share:latest-amd64"
+    - "lucasduport/stream-share:{{ .Tag }}"
+    - "lucasduport/stream-share:v{{ .Major }}"
+    - "lucasduport/stream-share:v{{ .Major }}.{{ .Minor }}"
+    - "lucasduport/stream-share:latest"
     use: buildx
     goos: linux
     goarch: amd64
     ids:
-    - iptv-proxy
+    - stream-share
     build_flag_templates:
     - "--platform=linux/amd64"
     - "--label=org.opencontainers.image.created={{.Date}}"
