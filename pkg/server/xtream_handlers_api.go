@@ -78,15 +78,15 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
         xtreamM3uCacheLock.RUnlock()
         playlist, err := m3u.Parse(m3uURL.String())
         if err != nil {
-            ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+            _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
             return
         }
         if len(playlist.Tracks) == 0 {
-            ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist")))
+            _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist")))
             return
         }
         if err := c.cacheXtreamM3u(&playlist, m3uURL.String()); err != nil {
-            ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+            _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
             return
         }
     } else {
