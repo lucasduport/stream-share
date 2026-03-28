@@ -151,7 +151,7 @@ func (b *Bot) enrichFirstPage(query string, results []types.VODResult, perPage i
 func buildOptionsForRange(results []types.VODResult, start, end int) []discordgo.SelectMenuOption {
     if start < 0 { start = 0 }
     if end > len(results) { end = len(results) }
-    if start > end { start, end = end, end }
+    if start > end { start = end }
     opts := make([]discordgo.SelectMenuOption, 0, end-start)
     for i := start; i < end; i++ {
         r := results[i]

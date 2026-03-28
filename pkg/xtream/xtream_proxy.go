@@ -29,7 +29,6 @@ import (
     "net/url"
     "strings"
     "time"
-    "unicode/utf8"
 
     "github.com/lucasduport/stream-share/pkg/config"
     "github.com/lucasduport/stream-share/pkg/utils"
@@ -171,108 +170,10 @@ func (c *Client) GetXMLTV() ([]byte, error) {
     return xmlData, nil
 }
 
-// The following utility functions were retained from the original client
-func max(a, b int) int { if a > b { return a }; return b }
-func replaceAllNonBasicChars(input []byte) []byte {
-    isArray := false
-    if len(input) > 0 && input[0] == '[' { isArray = true }
-    validUTF8 := make([]byte, 0, len(input))
-    for len(input) > 0 {
-        r, size := utf8.DecodeRune(input)
-        if r == utf8.RuneError { input = input[1:] } else { validUTF8 = append(validUTF8, []byte(string(r))...); input = input[size:] }
-    }
-    s := string(validUTF8)
-    var result strings.Builder
-    if isArray { result.WriteString("[") }
-    inString := false
-    inObject := false
-    objectCount := 0
-    for i, r := range s {
-        switch {
-        case r == '"':
-            if i > 0 && s[i-1] != '\\' { inString = !inString }
-            result.WriteRune(r)
-        case r == '{':
-            if !inString { inObject = true; objectCount++; result.WriteRune(r) } else { result.WriteRune(' ') }
-        case r == '}':
-            if !inString && inObject { objectCount--; if objectCount == 0 { inObject = false }; result.WriteRune(r) } else { result.WriteRune(' ') }
-        case inString:
-            if r < 32 || r > 126 { result.WriteRune(' ') } else { result.WriteRune(r) }
-        default:
-            if r == '[' || r == ']' || r == ',' || r == ':' || r == 't' || r == 'r' || r == 'u' || r == 'e' || r == 'f' || r == 'a' || r == 'l' || r == 's' || r == 'n' || r == 'u' || r == 'l' || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == ' ' { result.WriteRune(r) }
-        }
-    }
-    if isArray && !strings.HasSuffix(result.String(), "]") { result.WriteString("]") }
-    s = result.String()
-    s = strings.ReplaceAll(s, ",]", "]")
-    s = strings.ReplaceAll(s, ",}", "}")
-    s = strings.ReplaceAll(s, ",,", ",")
-    s = strings.ReplaceAll(s, "::", ":")
-    return []byte(s)
-}
-
 func createEmergencyCategoryData() []map[string]interface{} {
     utils.DebugLog("Creating emergency fallback category data")
     return []map[string]interface{}{{"category_id": "1", "category_name": "Default Category", "parent_id": "0"}}
 }
-
-func sanitizeJSON(input string) string {
-    result := input
-    result = strings.ReplaceAll(result, "\\/", "/")
-    result = strings.ReplaceAll(result, "\u0000", "")
-    if strings.HasPrefix(result, "[") && strings.HasSuffix(result, "]") { result = strings.ReplaceAll(result, ",]", "]") }
-    return result
-}
-
-func sanitizeUnicodeJSON(input []byte) []byte {
-    if len(input) == 0 { return input }
-    result := string(input)
-    originalLen := len(result)
-    utils.DebugLog("Sanitizing JSON: original length %d bytes", originalLen)
-    result = removeProblematicCharacters(result)
-    result = fixJsonSyntaxErrors(result)
-    result = normalizeQuotes(result)
-    result = fixBrokenUTF8(result)
-    result = balanceBracketsAndBraces(result)
-    utils.DebugLog("Sanitizing complete: new length %d bytes (%d%% of original)", len(result), (len(result) * 100 / max(1, originalLen)))
-    return []byte(result)
-}
-
-func removeProblematicCharacters(s string) string {
-    s = strings.TrimPrefix(s, "\uFEFF")
-    s = strings.ReplaceAll(s, "\u0000", "")
-    s = strings.ReplaceAll(s, "\\/", "/")
-    for i := 0; i < 32; i++ { if i != 9 && i != 10 && i != 13 { s = strings.ReplaceAll(s, string(rune(i)), "") } }
-    return s
-}
-
-func fixJsonSyntaxErrors(s string) string {
-    s = strings.ReplaceAll(s, ",]", "]")
-    s = strings.ReplaceAll(s, ",}", "}")
-    s = strings.ReplaceAll(s, ",,", ",")
-    s = strings.ReplaceAll(s, "::", ":")
-    return s
-}
-
-func normalizeQuotes(s string) string {
-    replacements := map[string]string{"“": "\"", "”": "\"", "‘": "'", "’": "'", "«": "\"", "»": "\""}
-    for from, to := range replacements { s = strings.ReplaceAll(s, from, to) }
-    return s
-}
-
-func balanceBracketsAndBraces(s string) string {
-    openBrackets := strings.Count(s, "[")
-    closeBrackets := strings.Count(s, "]")
-    for i := 0; i < openBrackets-closeBrackets; i++ { s += "]"; utils.DebugLog("Added missing closing bracket ]") }
-    openBraces := strings.Count(s, "{")
-    closeBraces := strings.Count(s, "}")
-    for i := 0; i < openBraces-closeBraces; i++ { s += "}"; utils.DebugLog("Added missing closing brace }") }
-    return s
-}
-
-func fixBrokenUTF8(s string) string { return string([]rune(s)) }
-
-func sanitizeAggressively(input []byte) []byte { return replaceAllNonBasicChars(input) }
 
 // fallbackForAction returns a sensible empty structure per action
 func fallbackForAction(action string) interface{} {

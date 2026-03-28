@@ -42,8 +42,10 @@ func (c *Config) cacheXtreamM3u(playlist *m3u.Playlist, cacheName string) error 
     xtreamM3uCacheLock.Lock()
     defer xtreamM3uCacheLock.Unlock()
 
-    tmp := *c
-    tmp.playlist = playlist
+    // Temporarily swap the playlist to avoid copying a mutex-containing struct.
+    origPlaylist := c.playlist
+    c.playlist = playlist
+    defer func() { c.playlist = origPlaylist }()
 
     path := filepath.Join(os.TempDir(), uuid.NewV4().String()+".stream-share.m3u")
     f, err := os.Create(path)
@@ -52,7 +54,7 @@ func (c *Config) cacheXtreamM3u(playlist *m3u.Playlist, cacheName string) error 
     }
     defer f.Close()
 
-    if err := tmp.marshallInto(f, true); err != nil {
+    if err := c.marshallInto(f, true); err != nil {
         return err
     }
     xtreamM3uCache[cacheName] = cacheMeta{path, time.Now()}

@@ -190,7 +190,7 @@ func (c *Config) enrichVODPage(ctx *gin.Context) {
 				reqHTTP.Header.Set("Accept-Language", utils.GetLanguageHeader())
 				reqHTTP.Header.Set("Accept", "*/*")
 				if resp, err := client.Do(reqHTTP); err == nil {
-					io.Copy(io.Discard, resp.Body)
+					_, _ = io.Copy(io.Discard, resp.Body)
 					resp.Body.Close()
 					if cr := resp.Header.Get("Content-Range"); cr != "" {
 						if total := strings.TrimSpace(cr[strings.LastIndex(cr, "/")+1:]); total != "*" {
@@ -380,7 +380,7 @@ func (c *Config) pickVODExtension(ctx *gin.Context, basePath, streamID string) s
 			getReq.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 			getReq.Header.Set("Range", "bytes=0-0")
 			if getResp, getErr := client.Do(getReq); getErr == nil {
-				io.Copy(io.Discard, getResp.Body)
+				_, _ = io.Copy(io.Discard, getResp.Body)
 				getResp.Body.Close()
 				if (getResp.StatusCode >= 200 && getResp.StatusCode < 300) || getResp.StatusCode == http.StatusPartialContent {
 					utils.DebugLog("VOD probe (GET range) ok %d for %s", getResp.StatusCode, utils.MaskURL(url))
@@ -670,7 +670,6 @@ func (c *Config) fetchToFile(upstream, dest, streamID string, expires time.Time)
 		}
 	}
 	n := downloaded
-	if err != nil { utils.ErrorLog("Cache: copy error: %v", err); c.cacheFail(streamID); return }
 	if err := f.Sync(); err != nil { utils.WarnLog("Cache: fsync warning: %v", err) }
 	if err := os.Rename(tmp, dest); err != nil { utils.ErrorLog("Cache: rename error: %v", err); c.cacheFail(streamID); return }
 	utils.InfoLog("Caching done: %s (%s)", dest, utils.HumanBytes(n))
@@ -694,17 +693,6 @@ func (c *Config) cacheFail(streamID string) {
 	}
 }
 
-// sanitizeFilename makes a safe filename
-func sanitizeFilename(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" { return "vod" }
-	repl := []string{"/","-", "\\","-",":","-","*","x","?","","\"","","<","","<","",">","","|","-"}
-	for i := 0; i < len(repl); i += 2 { s = strings.ReplaceAll(s, repl[i], repl[i+1]) }
-	// collapse spaces
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > 120 { s = s[:120] }
-	return s
-}
 // findExtInM3U scans a given M3U file for an entry path containing basePath and having
 // the last segment starting with streamID plus an extension.
 func findExtInM3U(filePath, basePath, streamID string) string {

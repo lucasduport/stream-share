@@ -22,7 +22,7 @@ import (
     "bytes"
     "encoding/json"
     "fmt"
-    "io/ioutil"
+    "io"
     "net/http"
     "net/url"
     "strconv"
@@ -66,7 +66,7 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
 
     m3uURL, err := url.Parse(rawURL)
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
 
@@ -78,15 +78,15 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
         xtreamM3uCacheLock.RUnlock()
         playlist, err := m3u.Parse(m3uURL.String())
         if err != nil {
-            ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+            _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
             return
         }
         if len(playlist.Tracks) == 0 {
-            ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist")))
+            _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist")))
             return
         }
         if err := c.cacheXtreamM3u(&playlist, m3uURL.String()); err != nil {
-            ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+            _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
             return
         }
     } else {
@@ -155,23 +155,23 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 
     client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
 
     resp, httpcode, contentType, err := client.Action(c.ProxyConfig, action, q)
     if err != nil {
-        ctx.AbortWithError(httpcode, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(httpcode, utils.PrintErrorAndReturn(err))
         return
     }
 
     if contentType == "application/json" {
         if s, ok := resp.(string); ok && strings.TrimSpace(s) == "" {
-            ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
+            _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
             return
         }
         if b, ok := resp.([]byte); ok && len(bytes.TrimSpace(b)) == 0 {
-            ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
+            _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
             return
         }
     }
@@ -191,14 +191,14 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 func (c *Config) xtreamPlayerAPIGET(ctx *gin.Context) { c.xtreamPlayerAPI(ctx, ctx.Request.URL.Query()) }
 
 func (c *Config) xtreamPlayerAPIPOST(ctx *gin.Context) {
-    contents, err := ioutil.ReadAll(ctx.Request.Body)
+    contents, err := io.ReadAll(ctx.Request.Body)
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
     q, err := url.ParseQuery(string(contents))
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
     c.xtreamPlayerAPI(ctx, q)

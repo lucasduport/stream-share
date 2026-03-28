@@ -38,7 +38,7 @@ func (b *Bot) handleTimeout(s *discordgo.Session, m *discordgo.MessageCreate, ar
     if len(args) != 2 { b.info(m.ChannelID, "⏳ Timeout User", "Usage: `!timeout <username> <minutes>`"); return }
     username := args[0]
     minutes := 0
-    fmt.Sscanf(args[1], "%d", &minutes)
+    _, _ = fmt.Sscanf(args[1], "%d", &minutes)
     if minutes <= 0 { b.warn(m.ChannelID, "⏳ Invalid Timeout", "Timeout minutes must be a positive number."); return }
     ok, _, err := b.makeAPIRequest("POST", "/users/timeout/"+username, map[string]int{"minutes": minutes})
     if err != nil || !ok { b.fail(m.ChannelID, "❌ Timeout Failed", fmt.Sprintf("We couldn't set a timeout for this user.\n\nError: `%v`", err)); return }

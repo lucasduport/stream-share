@@ -221,6 +221,10 @@ func toMessageCreateFromInteraction(i *discordgo.InteractionCreate, content stri
     } else if i.User != nil {
         mc.Author = i.User
         mc.GuildID = ""
+    } else {
+        // Fallback: empty user prevents nil dereference; handlers will fail gracefully
+        // (e.g. LDAP lookup returns no user → "Link your account" reply)
+        mc.Author = &discordgo.User{}
     }
     return mc
 }
@@ -229,11 +233,4 @@ func channelIDFromInteraction(i *discordgo.InteractionCreate) string {
     if i.ChannelID != "" { return i.ChannelID }
     if i.Interaction != nil && i.Interaction.ChannelID != "" { return i.Interaction.ChannelID }
     return ""
-}
-
-// closeInteractionThinking edits the original interaction response to clear the "thinking…" state
-func closeInteractionThinking(s *discordgo.Session, i *discordgo.InteractionCreate) {
-    // Best-effort: edit to a minimal ephemeral note; do not delete to avoid UI ‘interaction failed’ glitches
-    note := ""
-    _, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &note})
 }
