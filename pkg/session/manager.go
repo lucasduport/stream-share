@@ -721,6 +721,51 @@ func (sm *SessionManager) DisconnectUser(username string) {
 	utils.InfoLog("User %s forcibly disconnected", username)
 }
 
+// RegisterVODView creates a synthetic stream session so status commands see users watching local files.
+func (sm *SessionManager) RegisterVODView(username, streamID, streamType, title string) {
+	sm.userLock.Lock()
+	if sess, exists := sm.userSessions[username]; exists {
+		sess.StreamID = streamID
+		sess.StreamType = streamType
+		sess.LastActive = time.Now()
+	}
+	sm.userLock.Unlock()
+
+	sm.streamLock.Lock()
+	defer sm.streamLock.Unlock()
+	if ss, exists := sm.streamSessions[streamID]; exists {
+		ss.AddViewer(username)
+		ss.LastRequested = time.Now()
+	} else {
+		ss := &types.StreamSession{
+			StreamID: streamID, StreamType: streamType, StreamTitle: title,
+			StartTime: time.Now(), LastRequested: time.Now(),
+			Viewers: make(map[string]time.Time), Active: true,
+		}
+		ss.AddViewer(username)
+		sm.streamSessions[streamID] = ss
+	}
+}
+
+// UnregisterVODView removes a user from a synthetic VOD viewing session.
+func (sm *SessionManager) UnregisterVODView(username, streamID string) {
+	sm.userLock.Lock()
+	if sess, exists := sm.userSessions[username]; exists && sess.StreamID == streamID {
+		sess.StreamID = ""
+		sess.StreamType = ""
+	}
+	sm.userLock.Unlock()
+
+	sm.streamLock.Lock()
+	defer sm.streamLock.Unlock()
+	if ss, exists := sm.streamSessions[streamID]; exists {
+		if !ss.RemoveViewer(username) {
+			ss.Active = false
+			delete(sm.streamSessions, streamID)
+		}
+	}
+}
+
 // GetStreamInfo gets information about a specific stream
 func (sm *SessionManager) GetStreamInfo(streamID string) (*types.StreamSession, bool) {
 	sm.streamLock.RLock()
