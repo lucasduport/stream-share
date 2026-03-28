@@ -110,9 +110,9 @@ func (c *Config) xtreamStream(ctx *gin.Context, oriURL *url.URL) {
         utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
         xtreamM3uCacheLock.RUnlock()
         playlist, err := m3u.Parse(m3uURL.String())
-        if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
-        if len(playlist.Tracks) == 0 { ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist"))); return }
-        if err := c.cacheXtreamM3u(&playlist, m3uURL.String()); err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+        if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+        if len(playlist.Tracks) == 0 { _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist"))); return }
+        if err := c.cacheXtreamM3u(&playlist, m3uURL.String()); err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     } else {
         xtreamM3uCacheLock.RUnlock()
     }
@@ -127,23 +127,23 @@ func (c *Config) xtreamStream(ctx *gin.Context, oriURL *url.URL) {
 
 func (c *Config) xtreamXMLTV(ctx *gin.Context) {
     client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     resp, err := client.GetXMLTV()
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     ctx.Data(http.StatusOK, "application/xml", resp)
 }
 
 func (c *Config) xtreamStreamHandler(ctx *gin.Context) {
     id := ctx.Param("id")
     rpURL, err := url.Parse(fmt.Sprintf("%s/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     c.xtreamStream(ctx, rpURL)
 }
 
 func (c *Config) xtreamStreamLive(ctx *gin.Context) {
     id := ctx.Param("id")
     rpURL, err := url.Parse(fmt.Sprintf("%s/live/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     c.xtreamStream(ctx, rpURL)
 }
 
@@ -151,7 +151,7 @@ func (c *Config) xtreamStreamPlay(ctx *gin.Context) {
     token := ctx.Param("token")
     t := ctx.Param("type")
     rpURL, err := url.Parse(fmt.Sprintf("%s/play/%s/%s", c.XtreamBaseURL, token, t))
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     c.xtreamStream(ctx, rpURL)
 }
 
@@ -160,7 +160,7 @@ func (c *Config) xtreamStreamTimeshift(ctx *gin.Context) {
     start := ctx.Param("start")
     id := ctx.Param("id")
     rpURL, err := url.Parse(fmt.Sprintf("%s/timeshift/%s/%s/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, duration, start, id))
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     c.stream(ctx, rpURL)
 }
 
@@ -214,7 +214,7 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
         return
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/movie/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     utils.DebugLog("Movie streaming request - using Xtream credentials for upstream: %s", rpURL.String())
     c.xtreamStream(ctx, rpURL)
 }
@@ -263,7 +263,7 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
         return
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/series/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     c.xtreamStream(ctx, rpURL)
 }
 
@@ -389,38 +389,38 @@ func (c *Config) xtreamHlsStream(ctx *gin.Context) {
     chunk := ctx.Param("chunk")
     s := strings.Split(chunk, "_")
     if len(s) != 2 {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(errors.New("HSL malformed chunk")))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(errors.New("HSL malformed chunk")))
         return
     }
     channel := s[0]
 
     redirURL, err := getHlsRedirectURL(channel)
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
 
     req, reqErr := http.NewRequestWithContext(ctx.Request.Context(), "GET", fmt.Sprintf("%s://%s/hls/%s/%s", redirURL.Scheme, redirURL.Host, ctx.Param("token"), ctx.Param("chunk")), nil)
-    if reqErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(reqErr)); return }
+    if reqErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(reqErr)); return }
 
     mergeHttpHeader(req.Header, ctx.Request.Header)
 
     resp, doErr := http.DefaultClient.Do(req)
-    if doErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(doErr)); return }
+    if doErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(doErr)); return }
     defer resp.Body.Close()
 
     if resp.StatusCode == http.StatusFound {
         loc, locErr := resp.Location()
-        if locErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(locErr)); return }
+        if locErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(locErr)); return }
         id := ctx.Param("id")
         if strings.Contains(loc.String(), id) {
             hlsChannelsRedirectURLLock.Lock(); hlsChannelsRedirectURL[id] = *loc; hlsChannelsRedirectURLLock.Unlock()
             hlsReq, hlsReqErr := http.NewRequestWithContext(ctx.Request.Context(), "GET", loc.String(), nil)
-            if hlsReqErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsReqErr)); return }
+            if hlsReqErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsReqErr)); return }
             mergeHttpHeader(hlsReq.Header, ctx.Request.Header)
             hlsResp, hlsDoErr := http.DefaultClient.Do(hlsReq)
-            if hlsDoErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsDoErr)); return }
+            if hlsDoErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsDoErr)); return }
             defer hlsResp.Body.Close()
 
             b, readErr := io.ReadAll(hlsResp.Body)
-            if readErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(readErr)); return }
+            if readErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(readErr)); return }
             body := string(b)
             body = strings.ReplaceAll(body, "/"+c.XtreamUser.String()+"/"+c.XtreamPassword.String()+"/", "/"+c.User.String()+"/"+c.Password.String()+"/")
             utils.DebugLog("HLS stream response modified to use proxy credentials for client URLs")
@@ -428,7 +428,7 @@ func (c *Config) xtreamHlsStream(ctx *gin.Context) {
             ctx.Data(http.StatusOK, hlsResp.Header.Get("Content-Type"), []byte(body))
             return
         }
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(errors.New("Unable to HLS stream")))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(errors.New("Unable to HLS stream")))
         return
     }
 
@@ -440,27 +440,27 @@ func (c *Config) hlsXtreamStream(ctx *gin.Context, oriURL *url.URL) {
     utils.DebugLog("HLS stream request with URL: %s", oriURL.String())
     client := &http.Client{ CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse } }
     req, reqErr := http.NewRequestWithContext(ctx.Request.Context(), "GET", oriURL.String(), nil)
-    if reqErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(reqErr)); return }
+    if reqErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(reqErr)); return }
     mergeHttpHeader(req.Header, ctx.Request.Header)
     resp, doErr := client.Do(req)
-    if doErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(doErr)); return }
+    if doErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(doErr)); return }
     defer resp.Body.Close()
 
     if resp.StatusCode == http.StatusFound {
         loc, locErr := resp.Location()
-        if locErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(locErr)); return }
+        if locErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(locErr)); return }
         id := ctx.Param("id")
         if strings.Contains(loc.String(), id) {
             hlsChannelsRedirectURLLock.Lock(); hlsChannelsRedirectURL[id] = *loc; hlsChannelsRedirectURLLock.Unlock()
             hlsReq, hlsReqErr := http.NewRequestWithContext(ctx.Request.Context(), "GET", loc.String(), nil)
-            if hlsReqErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsReqErr)); return }
+            if hlsReqErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsReqErr)); return }
             mergeHttpHeader(hlsReq.Header, ctx.Request.Header)
             hlsResp, hlsDoErr := client.Do(hlsReq)
-            if hlsDoErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsDoErr)); return }
+            if hlsDoErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsDoErr)); return }
             defer hlsResp.Body.Close()
 
             b, readErr := io.ReadAll(hlsResp.Body)
-            if readErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(readErr)); return }
+            if readErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(readErr)); return }
             body := string(b)
             body = strings.ReplaceAll(body, "/"+c.XtreamUser.String()+"/"+c.XtreamPassword.String()+"/", "/"+c.User.String()+"/"+c.Password.String()+"/")
             utils.DebugLog("HLS stream response modified to use proxy credentials for client URLs")
@@ -468,7 +468,7 @@ func (c *Config) hlsXtreamStream(ctx *gin.Context, oriURL *url.URL) {
             ctx.Data(http.StatusOK, hlsResp.Header.Get("Content-Type"), []byte(body))
             return
         }
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(errors.New("Unable to HLS stream")))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(errors.New("Unable to HLS stream")))
         return
     }
 
@@ -479,9 +479,9 @@ func (c *Config) hlsXtreamStream(ctx *gin.Context, oriURL *url.URL) {
 func (c *Config) xtreamHlsrStream(ctx *gin.Context) {
     channel := ctx.Param("channel")
     redirURL, err := getHlsRedirectURL(channel)
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
     nextURL, parseErr := url.Parse(fmt.Sprintf("%s://%s/hlsr/%s/%s/%s/%s/%s/%s", redirURL.Scheme, redirURL.Host, ctx.Param("token"), c.XtreamUser, c.XtreamPassword, ctx.Param("channel"), ctx.Param("hash"), ctx.Param("chunk")))
-    if parseErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(parseErr)); return }
+    if parseErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(parseErr)); return }
     c.hlsXtreamStream(ctx, nextURL)
 }
 
