@@ -34,7 +34,6 @@ import (
     "time"
 
     "github.com/gin-gonic/gin"
-    "github.com/jamesnetherton/m3u"
     "github.com/lucasduport/stream-share/pkg/types"
     "github.com/lucasduport/stream-share/pkg/utils"
     xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
@@ -91,38 +90,7 @@ func (c *Config) xtreamStream(ctx *gin.Context, oriURL *url.URL) {
         return
     }
 
-    utils.DebugLog("Xtream backend request using Xtream credentials: user=%s, password=%s, baseURL=%s", c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL)
-    rawURL := fmt.Sprintf("%s/get.php?username=%s&password=%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword)
-
-    q := ctx.Request.URL.Query()
-    for k, v := range q {
-        if k == "username" || k == "password" { continue }
-        rawURL = fmt.Sprintf("%s&%s=%s", rawURL, k, strings.Join(v, ","))
-    }
-
-    m3uURL, err := url.Parse(rawURL)
-    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
-
-    xtreamM3uCacheLock.RLock()
-    meta, ok := xtreamM3uCache[m3uURL.String()]
-    d := time.Since(meta.Time)
-    if !ok || d.Hours() >= float64(c.M3UCacheExpiration) {
-        utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
-        xtreamM3uCacheLock.RUnlock()
-        playlist, err := m3u.Parse(m3uURL.String())
-        if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
-        if len(playlist.Tracks) == 0 { _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty playlist"))); return }
-        if err := c.cacheXtreamM3u(&playlist, m3uURL.String()); err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
-    } else {
-        xtreamM3uCacheLock.RUnlock()
-    }
-
-    ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))
-    xtreamM3uCacheLock.RLock()
-    path := xtreamM3uCache[m3uURL.String()].string
-    xtreamM3uCacheLock.RUnlock()
-    ctx.Header("Content-Type", "application/octet-stream")
-    ctx.File(path)
+    c.stream(ctx, oriURL)
 }
 
 func (c *Config) xtreamXMLTV(ctx *gin.Context) {
