@@ -1,6 +1,6 @@
 /*
- * Iptv-Proxy is a project to proxyfie an m3u file and to proxyfie an Xtream iptv service (client API).
- * Copyright (C) 2020  Pierre-Emmanuel Jacquier
+ * stream-share is a project to efficiently share the use of an IPTV service.
+ * Copyright (C) 2025  Lucas Duport
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// routes registers the primary API surface under the configurable custom endpoint.
+// It decides between Xtream-backed endpoints and proxified M3U based on config.
 func (c *Config) routes(r *gin.RouterGroup) {
 	r = r.Group(c.CustomEndpoint)
 
@@ -47,6 +49,7 @@ func (c *Config) routes(r *gin.RouterGroup) {
 	c.m3uRoutes(r)
 }
 
+// xtreamRoutes registers endpoints backed by an Xtream provider.
 func (c *Config) xtreamRoutes(r *gin.RouterGroup) {
 	getphp := gin.HandlerFunc(c.xtreamGet)
 	if c.XtreamGenerateApiGet {
@@ -58,16 +61,17 @@ func (c *Config) xtreamRoutes(r *gin.RouterGroup) {
 	r.GET("/player_api.php", c.authenticate, c.xtreamPlayerAPIGET)
 	r.POST("/player_api.php", c.appAuthenticate, c.xtreamPlayerAPIPOST)
 	r.GET("/xmltv.php", c.authenticate, c.xtreamXMLTV)
-	r.GET(fmt.Sprintf("/%s/%s/:id", c.User, c.Password), c.xtreamStreamHandler)
-	r.GET(fmt.Sprintf("/live/%s/%s/:id", c.User, c.Password), c.xtreamStreamLive)
-	r.GET(fmt.Sprintf("/timeshift/%s/%s/:duration/:start/:id", c.User, c.Password), c.xtreamStreamTimeshift)
-	r.GET(fmt.Sprintf("/movie/%s/%s/:id", c.User, c.Password), c.xtreamStreamMovie)
-	r.GET(fmt.Sprintf("/series/%s/%s/:id", c.User, c.Password), c.xtreamStreamSeries)
-	r.GET(fmt.Sprintf("/hlsr/:token/%s/%s/:channel/:hash/:chunk", c.User, c.Password), c.xtreamHlsrStream)
+	r.GET(fmt.Sprintf("/%s/%s/:id", c.XtreamUser.String(), c.XtreamPassword.String()), c.xtreamStreamHandler)
+	r.GET(fmt.Sprintf("/live/%s/%s/:id", c.XtreamUser.String(), c.XtreamPassword.String()), c.xtreamStreamLive)
+	r.GET(fmt.Sprintf("/timeshift/%s/%s/:duration/:start/:id", c.XtreamUser.String(), c.XtreamPassword.String()), c.xtreamStreamTimeshift)
+	r.GET(fmt.Sprintf("/movie/%s/%s/:id", c.XtreamUser.String(), c.XtreamPassword.String()), c.xtreamStreamMovie)
+	r.GET(fmt.Sprintf("/series/%s/%s/:id", c.XtreamUser.String(), c.XtreamPassword.String()), c.xtreamStreamSeries)
+	r.GET(fmt.Sprintf("/hlsr/:token/%s/%s/:channel/:hash/:chunk", c.XtreamUser.String(), c.XtreamPassword.String()), c.xtreamHlsrStream)
 	r.GET("/hls/:token/:chunk", c.xtreamHlsStream)
 	r.GET("/play/:token/:type", c.xtreamStreamPlay)
 }
 
+// m3uRoutes exposes a proxified, credential-rewritten M3U and its track endpoints.
 func (c *Config) m3uRoutes(r *gin.RouterGroup) {
 	r.GET("/"+c.M3UFileName, c.authenticate, c.getM3U)
 	// XXX Private need: for external Android app
@@ -80,9 +84,9 @@ func (c *Config) m3uRoutes(r *gin.RouterGroup) {
 		}
 
 		if strings.HasSuffix(track.URI, ".m3u8") {
-			r.GET(fmt.Sprintf("/%s/%s/%s/%d/:id", c.endpointAntiColision, c.User, c.Password, i), trackConfig.m3u8ReverseProxy)
+			r.GET(fmt.Sprintf("/%s/%s/%s/%d/:id", c.endpointAntiColision, c.XtreamUser.String(), c.XtreamPassword.String(), i), trackConfig.m3u8ReverseProxy)
 		} else {
-			r.GET(fmt.Sprintf("/%s/%s/%s/%d/%s", c.endpointAntiColision, c.User, c.Password, i, path.Base(track.URI)), trackConfig.reverseProxy)
+			r.GET(fmt.Sprintf("/%s/%s/%s/%d/%s", c.endpointAntiColision, c.XtreamUser.String(), c.XtreamPassword.String(), i, path.Base(track.URI)), trackConfig.reverseProxy)
 		}
 	}
 }

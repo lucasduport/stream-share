@@ -13,7 +13,7 @@
 # Project-local glide cache, RE: https://github.com/Masterminds/glide/issues/736
 .glide/
 
-iptv-proxy
+stream-share
 iptv/iptv.m3u
 
 # Backup files
@@ -23,3 +23,6 @@ iptv/iptv.m3u
 /.lh
 /.vscode
 
+.docker-compose.yml
+
+dist/

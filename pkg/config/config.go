@@ -1,6 +1,6 @@
 /*
- * Iptv-Proxy is a project to proxyfie an m3u file and to proxyfie an Xtream iptv service (client API).
- * Copyright (C) 2020  Pierre-Emmanuel Jacquier
+ * stream-share is a project to efficiently share the use of an IPTV service.
+ * Copyright (C) 2025  Lucas Duport
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@ var DebugLoggingEnabled bool
 // Set a Cache Folder to save responses into
 var CacheFolder string
 
-// CredentialString represents an iptv-proxy credential.
+// CredentialString represents an stream-share credential.
 type CredentialString string
 
 // PathEscape escapes the credential for an url path.
@@ -62,4 +62,13 @@ type ProxyConfig struct {
 	AdvertisedPort       int
 	HTTPS                bool
 	User, Password       CredentialString
+	// LDAP authentication fields
+	LDAPEnabled          bool
+	LDAPServer           string
+	LDAPBaseDN           string
+	LDAPBindDN           string
+	LDAPBindPassword     string
+	LDAPUserAttribute    string
+	LDAPGroupAttribute   string
+	LDAPRequiredGroup    string
 }
