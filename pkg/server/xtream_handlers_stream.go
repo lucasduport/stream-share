@@ -156,7 +156,7 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
     }
     if c.db != nil {
         if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil {
-            // If file exists and is ready, serve locally; if downloading, serve progressively from .part
+            // If file exists and is ready, serve locally; if DB status is stale, serve as complete.
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
                 var ct string
                 if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
@@ -166,13 +166,13 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                     return
                 }
-                // Progressive serving from growing file
-                utils.InfoLog("Serving progressively from cache (downloading) for %s from %s", idRaw, entry.FilePath)
-                serveGrowingFileRange(ctx, entry.FilePath, ct, "", false, entry.TotalBytes)
+                // Final file exists but DB status is stale (rename completed before DB update).
+                utils.InfoLog("Serving complete cached file for %s (DB status pending update)", idRaw)
+                serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                 return
             }
         }
-        // Not cached yet: auto-start 7-day caching in background and serve progressively
+        // Not cached yet: auto-start 7-day caching in background
         // Determine extension from cached M3U if available, fallback to .mp4
         basePath := "movie"
         resolvedExt := c.findVODExtensionInCache(basePath, idRaw)
@@ -239,8 +239,9 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                     return
                 }
-                utils.InfoLog("Serving progressively from cache (downloading) for %s from %s", idRaw, entry.FilePath)
-                serveGrowingFileRange(ctx, entry.FilePath, ct, "", false, entry.TotalBytes)
+                // Final file exists but DB status is stale (rename completed before DB update).
+                utils.InfoLog("Serving complete cached file for %s (DB status pending update)", idRaw)
+                serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                 return
             }
         }
@@ -325,12 +326,13 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                     return
                 }
-                utils.InfoLog("Serving progressively from cache (downloading, proxy creds) for %s from %s", idRaw, entry.FilePath)
-                serveGrowingFileRange(ctx, entry.FilePath, ct, "", false, entry.TotalBytes)
+                // Final file exists but DB status is stale (rename completed before DB update).
+                utils.InfoLog("Serving complete cached file for %s (DB status pending update)", idRaw)
+                serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                 return
             }
         }
-        // Auto-start caching and serve progressively
+        // Auto-start caching
         basePath := "movie"
         resolvedExt := c.findVODExtensionInCache(basePath, idRaw)
         finalID := idRaw
@@ -394,8 +396,9 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                     return
                 }
-                utils.InfoLog("Serving progressively from cache (downloading, proxy creds) for %s from %s", idRaw, entry.FilePath)
-                serveGrowingFileRange(ctx, entry.FilePath, ct, "", false, entry.TotalBytes)
+                // Final file exists but DB status is stale (rename completed before DB update).
+                utils.InfoLog("Serving complete cached file for %s (DB status pending update)", idRaw)
+                serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
                 return
             }
         }
