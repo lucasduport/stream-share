@@ -95,7 +95,7 @@ func renderBar(done, total int64) string {
     if total > 0 {
         size = fmt.Sprintf("%s/%s", utils.HumanBytes(done), utils.HumanBytes(total))
     } else if done > 0 {
-        size = fmt.Sprintf("%s", utils.HumanBytes(done))
+        size = utils.HumanBytes(done)
     } else {
         size = "starting…"
     }

@@ -180,7 +180,7 @@ func serveLocalFileRange(ctx *gin.Context, filePath string, contentType string, 
         ctx.Status(http.StatusOK)
         // Stream efficiently
         if _, err := io.Copy(ctx.Writer, f); err != nil {
-            // client likely disconnected; just end
+            utils.DebugLog("serveLocalFileRange: full copy error (client likely disconnected): %v", err)
         }
         return
     }

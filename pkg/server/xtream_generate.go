@@ -108,7 +108,8 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 
             // Validate required fields
             streamName, hasName := streamMap["name"].(string)
-            streamID, hasID := streamMap["stream_id"].(string)
+            _, hasID := streamMap["stream_id"].(string)
+            var streamID string
 
             if !hasName || !hasID {
                 utils.DebugLog("WARNING: Stream missing required fields - Name: %v, ID: %v", streamMap["name"], streamMap["stream_id"])

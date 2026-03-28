@@ -157,7 +157,7 @@ func (c *Config) searchXtreamVOD(query string) ([]types.VODResult, error) {
 					req.Header.Set("Accept-Language", utils.GetLanguageHeader())
 					req.Header.Set("Accept", "*/*")
 					if resp, err := client.Do(req); err == nil {
-						io.Copy(io.Discard, resp.Body)
+						_, _ = io.Copy(io.Discard, resp.Body)
 						resp.Body.Close()
 						if cr := resp.Header.Get("Content-Range"); cr != "" {
 							if total := strings.TrimSpace(cr[strings.LastIndex(cr, "/")+1:]); total != "*" {
@@ -351,93 +351,6 @@ func (c *Config) refreshVODM3U(cacheFile string) error {
 	return nil
 }
 
-func searchVODInM3UFile(m3uPath string, query string) ([]types.VODResult, error) {
-	f, err := os.Open(m3uPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	q := strings.TrimSpace(query)
-	sc := bufio.NewScanner(f)
-	lastEXTINF := ""
-	results := make([]types.VODResult, 0, 50)
-
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "#EXTINF:") {
-			lastEXTINF = line
-			continue
-		}
-		// URL lines
-		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
-			u, err := url.Parse(line)
-			if err != nil {
-				continue
-			}
-			// Only consider movie entries
-			if !strings.Contains(u.Path, "/movie/") {
-				continue
-			}
-
-			// Title: take from EXTINF after the comma
-			title := ""
-			category := ""
-			if lastEXTINF != "" {
-				if idx := strings.LastIndex(lastEXTINF, ","); idx != -1 && idx+1 < len(lastEXTINF) {
-					title = strings.TrimSpace(lastEXTINF[idx+1:])
-				}
-				// Extract group-title="..."
-				attrs := lastEXTINF
-				if i := strings.Index(attrs, " "); i != -1 {
-					attrs = attrs[i+1:]
-				}
-				const key = `group-title="`
-				if pos := strings.Index(attrs, key); pos != -1 {
-					start := pos + len(key)
-					if end := strings.Index(attrs[start:], `"`); end != -1 {
-						category = attrs[start : start+end]
-					}
-				}
-			}
-			if title == "" {
-				title = path.Base(u.Path)
-			}
-
-			// Filter by query if provided: simple all-words contains (case-insensitive)
-			if q != "" && !simpleAllWordsContains(q, title) {
-				continue
-			}
-
-			// StreamID is the last path segment
-			streamID := path.Base(u.Path)
-
-			results = append(results, types.VODResult{
-				ID:       streamID,
-				Title:    title,
-				Category: category,
-				Duration: "",
-				Year:     "",
-				Rating:   "",
-				StreamID: streamID,
-				StreamType: "movie",
-				SizeBytes: 0,
-				Size:      "",
-			})
-
-			// Reset lastEXTINF after pairing with URL
-			lastEXTINF = ""
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
 // parseVODM3UExtensions scans the cached VOD M3U once and builds a map of streamID -> extension.
 func parseVODM3UExtensions(m3uPath string) (map[string]string, error) {
 	f, err := os.Open(m3uPath)
@@ -478,17 +391,6 @@ func parseInt64(s string) (int64, error) {
 	// fast path
 	n, err = strconv.ParseInt(s, 10, 64)
 	return n, err
-}
-
-// simpleAllWordsContains: split query by spaces and ensure each word is contained (case-insensitive) in text.
-func simpleAllWordsContains(query, text string) bool {
-	q := strings.TrimSpace(query)
-	if q == "" { return true }
-	t := strings.ToLower(text)
-	for _, w := range strings.Fields(strings.ToLower(q)) {
-		if !strings.Contains(t, w) { return false }
-	}
-	return true
 }
 
 // parseQueryTokens splits the query into tokens and extracts optional s/e (e.g., s02e04, s2e4, or separate s02 e04).
@@ -712,70 +614,6 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 	utils.DebugLog("Series search: returning %d results", len(out))
 	return out, nil
 }
-
-// logRawXtreamSeriesDiagnostics performs raw calls to Xtream API to collect JSON payloads
-// for series and a matching series_info to help diagnose unmarshaling issues in third-party clients.
-func (c *Config) logRawXtreamSeriesDiagnostics(q string) {
-	// Create our resilient client that parses into generic interfaces
-	cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
-	if err != nil {
-		utils.WarnLog("Diagnostics: failed to create raw Xtream client: %v", err)
-		return
-	}
-
-	// Fetch series list
-	resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series", url.Values{})
-	if err != nil {
-		utils.WarnLog("Diagnostics: get_series failed: %v (HTTP %d, CT=%s)", err, httpcode, contentType)
-		return
-	}
-	// Write raw to file if debugging enabled
-	if b, ok := tryJSONMarshal(resp); ok {
-		filename := fmt.Sprintf("series_raw_%s.json", time.Now().Format("20060102_150405"))
-		utils.WriteResponseToFile(filename, b, contentType)
-	}
-
-	// Try to find one series matching q and fetch its info
-	var seriesID string
-	switch arr := resp.(type) {
-	case []interface{}:
-		for _, item := range arr {
-			m, ok := item.(map[string]interface{})
-			if !ok { continue }
-			name := fmt.Sprintf("%v", m["name"])
-			if name == "" { continue }
-			if strings.Contains(strings.ToLower(name), q) {
-				seriesID = fmt.Sprintf("%v", m["series_id"])
-				utils.DebugLog("Diagnostics: matched series '%s' with id=%s", name, seriesID)
-				break
-			}
-		}
-	}
-	if seriesID == "" {
-		utils.DebugLog("Diagnostics: no matching series found for query %q to fetch series_info", q)
-		return
-	}
-	infoResp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series_info", url.Values{"series_id": {seriesID}})
-	if err != nil {
-		utils.WarnLog("Diagnostics: get_series_info failed for id=%s: %v (HTTP %d, CT=%s)", seriesID, err, httpcode, contentType)
-		return
-	}
-	if b, ok := tryJSONMarshal(infoResp); ok {
-		filename := fmt.Sprintf("series_info_%s_%s.json", seriesID, time.Now().Format("20060102_150405"))
-		utils.WriteResponseToFile(filename, b, contentType)
-	}
-}
-
-// tryJSONMarshal marshals v to pretty JSON bytes for logging
-func tryJSONMarshal(v interface{}) ([]byte, bool) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		utils.DebugLog("Diagnostics: failed to marshal JSON: %v", err)
-		return nil, false
-	}
-	return b, true
-}
-
 // firstNonEmpty returns the first non-empty/non-nil value among candidates
 func firstNonEmpty(values ...interface{}) interface{} {
 	for _, v := range values {

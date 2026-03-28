@@ -174,7 +174,7 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
                 var ct string
                 if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-                c.db.TouchVODCache(idRaw)
+                _ = c.db.TouchVODCache(idRaw)
                 if strings.ToLower(entry.Status) == "ready" {
                     utils.InfoLog("Serving cached movie for %s from %s", idRaw, entry.FilePath)
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
@@ -227,7 +227,7 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
                 var ct string
                 if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-                c.db.TouchVODCache(idRaw)
+                _ = c.db.TouchVODCache(idRaw)
                 if strings.ToLower(entry.Status) == "ready" {
                     utils.InfoLog("Serving cached episode for %s from %s", idRaw, entry.FilePath)
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
@@ -293,7 +293,7 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
                 var ct string
                 if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-                c.db.TouchVODCache(idRaw)
+                _ = c.db.TouchVODCache(idRaw)
                 if strings.ToLower(entry.Status) == "ready" {
                     utils.InfoLog("Serving cached movie (proxy creds path) for %s from %s", idRaw, entry.FilePath)
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
@@ -342,7 +342,7 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
                 var ct string
                 if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-                c.db.TouchVODCache(idRaw)
+                _ = c.db.TouchVODCache(idRaw)
                 if strings.ToLower(entry.Status) == "ready" {
                     utils.InfoLog("Serving cached episode (proxy creds path) for %s from %s", idRaw, entry.FilePath)
                     serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
