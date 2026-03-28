@@ -168,6 +168,14 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
     id := ctx.Param("id")
     // Normalize DB key: cached entries are stored by bare stream_id without extension
     idRaw := strings.TrimSuffix(id, path.Ext(id))
+    if c.sessionManager != nil {
+        username := ctx.GetString("username")
+        if username == "" { username = ctx.Param("username") }
+        if username != "" {
+            c.sessionManager.RegisterVODView(username, idRaw, "movie", idRaw)
+            defer c.sessionManager.UnregisterVODView(username, idRaw)
+        }
+    }
     if c.db != nil {
         if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil {
             // If file exists and is ready, serve locally; if downloading, serve progressively from .part
@@ -222,6 +230,14 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
 func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
     id := ctx.Param("id")
     idRaw := strings.TrimSuffix(id, path.Ext(id))
+    if c.sessionManager != nil {
+        username := ctx.GetString("username")
+        if username == "" { username = ctx.Param("username") }
+        if username != "" {
+            c.sessionManager.RegisterVODView(username, idRaw, "series", idRaw)
+            defer c.sessionManager.UnregisterVODView(username, idRaw)
+        }
+    }
     if c.db != nil {
         if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
@@ -288,6 +304,14 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
     id := ctx.Param("id")
     idRaw := strings.TrimSuffix(id, path.Ext(id))
     utils.DebugLog("Direct movie stream request with proxy credentials: username=%s, id=%s", ctx.Param("username"), id)
+    if c.sessionManager != nil {
+        username := ctx.GetString("username")
+        if username == "" { username = ctx.Param("username") }
+        if username != "" {
+            c.sessionManager.RegisterVODView(username, idRaw, "movie", idRaw)
+            defer c.sessionManager.UnregisterVODView(username, idRaw)
+        }
+    }
     if c.db != nil {
         if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
@@ -337,6 +361,14 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
     id := ctx.Param("id")
     idRaw := strings.TrimSuffix(id, path.Ext(id))
     utils.DebugLog("Direct series stream request with proxy credentials: username=%s, id=%s", ctx.Param("username"), id)
+    if c.sessionManager != nil {
+        username := ctx.GetString("username")
+        if username == "" { username = ctx.Param("username") }
+        if username != "" {
+            c.sessionManager.RegisterVODView(username, idRaw, "series", idRaw)
+            defer c.sessionManager.UnregisterVODView(username, idRaw)
+        }
+    }
     if c.db != nil {
         if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil {
             if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
@@ -619,11 +651,17 @@ func serveGrowingFileRange(ctx *gin.Context, filePath string, contentType string
         ctx.Status(http.StatusRequestedRangeNotSatisfiable)
         return
     }
-    // If requested start or end goes beyond available bytes, wait for growth (only when .part exists)
+
+    // Detect open-ended range (bytes=N-): player is seeking and wants everything from N onwards.
+    // Do NOT wait for end < sizeNow in this case — that would block until the full download finishes.
+    rawSpec := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(rng)), "bytes="))
+    if idx := strings.Index(rawSpec, ","); idx >= 0 { rawSpec = rawSpec[:idx] }
+    openEnded := strings.HasSuffix(strings.TrimSpace(rawSpec), "-")
+
+    // Wait until start is available; for bounded ranges also wait for end.
     for {
         sizeNow = getSize()
-        if start < sizeNow && end < sizeNow { break }
-        // If no longer downloading, clamp end
+        if start < sizeNow && (openEnded || end < sizeNow) { break }
         if _, err := os.Stat(partPath); err != nil {
             if sizeNow == 0 || start >= sizeNow {
                 ctx.Header("Content-Range", fmt.Sprintf("bytes */%d", sizeNow))
@@ -631,9 +669,9 @@ func serveGrowingFileRange(ctx *gin.Context, filePath string, contentType string
                 return
             }
             if end >= sizeNow { end = sizeNow - 1 }
+            openEnded = false // download done; treat as bounded
             break
         }
-        // Still downloading; wait for more data or cancel
         select {
         case <-ctx.Request.Context().Done():
             return
@@ -641,16 +679,55 @@ func serveGrowingFileRange(ctx *gin.Context, filePath string, contentType string
         }
     }
 
-    // Ready to serve the requested (possibly clamped) range
-    length := end - start + 1
     if _, err := f.Seek(start, io.SeekStart); err != nil { ctx.Status(http.StatusInternalServerError); return }
-    tot := totalSize
-    if tot == 0 { tot = max64(totalSize, getSize()) }
-    ctx.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, tot))
+
+    if openEnded {
+        // Open-ended seek: stream progressively from start, waiting for file growth.
+        // Use known totalSize or '*' to avoid telling the player the file ends at current download offset.
+        curEnd := getSize() - 1
+        if curEnd < start { curEnd = start }
+        totStr := "*"
+        if totalSize > 0 { totStr = strconv.FormatInt(totalSize, 10) }
+        ctx.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%s", start, curEnd, totStr))
+        ctx.Status(http.StatusPartialContent)
+        var offset int64 = start
+        buf := make([]byte, 256*1024)
+        for {
+            if cur, _ := f.Seek(0, io.SeekCurrent); cur != offset {
+                if _, err := f.Seek(offset, io.SeekStart); err != nil { return }
+            }
+            n, _ := f.Read(buf)
+            if n > 0 {
+                if _, werr := ctx.Writer.Write(buf[:n]); werr != nil { return }
+                offset += int64(n)
+                if fl, ok := ctx.Writer.(http.Flusher); ok { fl.Flush() }
+                continue
+            }
+            if _, err2 := os.Stat(partPath); err2 == nil {
+                select {
+                case <-ctx.Request.Context().Done():
+                    return
+                case <-time.After(200 * time.Millisecond):
+                    continue
+                }
+            }
+            return
+        }
+    }
+
+    // Bounded range: serve exactly the requested bytes.
+    // Use '*' for total when still downloading to avoid reporting partial size as the file's true size.
+    length := end - start + 1
+    totStr := "*"
+    if totalSize > 0 {
+        totStr = strconv.FormatInt(totalSize, 10)
+    } else if _, statErr := os.Stat(partPath); statErr != nil {
+        totStr = strconv.FormatInt(getSize(), 10) // download complete; use actual size
+    }
+    ctx.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%s", start, end, totStr))
     ctx.Header("Content-Length", strconv.FormatInt(length, 10))
     ctx.Status(http.StatusPartialContent)
 
-    // Stream exactly length bytes; tolerate short reads by waiting while downloading
     var remaining = length
     buf := make([]byte, 256*1024)
     for remaining > 0 {
@@ -664,7 +741,6 @@ func serveGrowingFileRange(ctx *gin.Context, filePath string, contentType string
             continue
         }
         if err == io.EOF || err == io.ErrUnexpectedEOF {
-            // If still downloading, wait and retry
             if _, statErr := os.Stat(partPath); statErr == nil {
                 select {
                 case <-ctx.Request.Context().Done():
@@ -673,7 +749,6 @@ func serveGrowingFileRange(ctx *gin.Context, filePath string, contentType string
                     continue
                 }
             }
-            // Not downloading anymore: stop
             return
         }
         if err != nil {
