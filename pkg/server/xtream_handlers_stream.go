@@ -193,10 +193,12 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
                 c.fetchToFile(upstream, dest, idRaw, expires)
             }()
         }
-        // Serve progressively from growing file
-        var ct string
-        if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-        serveGrowingFileRange(ctx, dest, ct, "", false, 0)
+        // Proxy to upstream directly: lets the IPTV server handle Content-Length, Content-Range,
+        // and Range seeks natively. This avoids avformat errors (MP4 moov at EOF) and seek loops.
+        // Background caching continues; once complete, future requests serve from the local file.
+        upstreamURL, upstreamErr := url.Parse(upstream)
+        if upstreamErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(upstreamErr)); return }
+        c.stream(ctx, upstreamURL)
         return
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/movie/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
@@ -261,9 +263,11 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
                 c.fetchToFile(upstream, dest, idRaw, expires)
             }()
         }
-        var ct string
-        if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-        serveGrowingFileRange(ctx, dest, ct, "", false, 0)
+        // Proxy to upstream directly for proper headers and native Range-seek support.
+        // Background caching continues; once complete, future requests serve from the local file.
+        upstreamURL, upstreamErr := url.Parse(upstream)
+        if upstreamErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(upstreamErr)); return }
+        c.stream(ctx, upstreamURL)
         return
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/series/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
@@ -345,9 +349,11 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
                 c.fetchToFile(upstream, dest, idRaw, expires)
             }()
         }
-        var ct string
-        if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-        serveGrowingFileRange(ctx, dest, ct, "", false, 0)
+        // Proxy to upstream directly for proper headers and native Range-seek support.
+        // Background caching continues; once complete, future requests serve from the local file.
+        upstreamURL, upstreamErr := url.Parse(upstream)
+        if upstreamErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(upstreamErr)); return }
+        c.stream(ctx, upstreamURL)
         return
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/movie/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
@@ -411,9 +417,11 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
                 c.fetchToFile(upstream, dest, idRaw, expires)
             }()
         }
-        var ct string
-        if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
-        serveGrowingFileRange(ctx, dest, ct, "", false, 0)
+        // Proxy to upstream directly for proper headers and native Range-seek support.
+        // Background caching continues; once complete, future requests serve from the local file.
+        upstreamURL, upstreamErr := url.Parse(upstream)
+        if upstreamErr != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(upstreamErr)); return }
+        c.stream(ctx, upstreamURL)
         return
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/series/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
