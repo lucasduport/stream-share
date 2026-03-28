@@ -66,7 +66,7 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
 
     m3uURL, err := url.Parse(rawURL)
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
 

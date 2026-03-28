@@ -106,7 +106,7 @@ func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
     req, err := http.NewRequestWithContext(ctx.Request.Context(), "GET", oriURL.String(), nil)
     if err != nil {
         utils.ErrorLog("Failed to create request: %v", err)
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
 

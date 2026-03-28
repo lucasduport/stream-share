@@ -82,7 +82,7 @@ func (b *Bot) handleInteractionCreate(s *discordgo.Session, i *discordgo.Interac
             days := 1
             if p := strings.LastIndex(ctx.Query, "for "); p != -1 {
                 var n int
-                fmt.Sscanf(ctx.Query[p:], "for %dd", &n)
+                _, _ = fmt.Sscanf(ctx.Query[p:], "for %dd", &n)
                 if n > 0 { days = n }
             }
             // Ack interaction ephemerally to avoid timeout/failure state

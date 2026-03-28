@@ -107,7 +107,7 @@ func PrettyPrintJSON(data interface{}) string {
 // WriteResponseToFile writes the response to a file for debugging
 func WriteResponseToFile(filename string, data []byte, contentType string) {
 	if cacheFolder := os.Getenv("CACHE_FOLDER"); cacheFolder != "" {
-		os.MkdirAll(cacheFolder, 0755)
+		_ = os.MkdirAll(cacheFolder, 0755)
 		filePath := filepath.Join(cacheFolder, filename)
 
 		err := os.WriteFile(filePath, data, 0644)

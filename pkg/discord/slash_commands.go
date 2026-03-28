@@ -234,10 +234,3 @@ func channelIDFromInteraction(i *discordgo.InteractionCreate) string {
     if i.Interaction != nil && i.Interaction.ChannelID != "" { return i.Interaction.ChannelID }
     return ""
 }
-
-// closeInteractionThinking edits the original interaction response to clear the "thinking…" state
-func closeInteractionThinking(s *discordgo.Session, i *discordgo.InteractionCreate) {
-    // Best-effort: edit to a minimal ephemeral note; do not delete to avoid UI ‘interaction failed’ glitches
-    note := ""
-    _, _ = s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &note})
-}

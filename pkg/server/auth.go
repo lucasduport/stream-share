@@ -87,7 +87,7 @@ func (c *Config) authenticate(ctx *gin.Context) {
     var authReq authRequest
     if err := ctx.Bind(&authReq); err != nil {
         utils.DebugLog("Bind error: %v", err)
-        ctx.AbortWithError(http.StatusBadRequest, err)
+        _ = ctx.AbortWithError(http.StatusBadRequest, err)
         return
     }
 

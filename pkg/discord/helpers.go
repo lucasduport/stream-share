@@ -57,12 +57,6 @@ func (b *Bot) isSameUser(expected string, i *discordgo.InteractionCreate) bool {
     return false
 }
 
-// interactionUserID extracts user ID from an interaction.
-func (b *Bot) interactionUserID(i *discordgo.InteractionCreate) string {
-    if i.Member != nil && i.Member.User != nil { return i.Member.User.ID }
-    if i.User != nil { return i.User.ID }
-    return ""
-}
 
 
 func getInt64(m map[string]interface{}, k string) int64 {
