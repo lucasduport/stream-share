@@ -9,23 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
-	"strings"
-
-	"github.com/buger/jsonparser"
-	"github.com/gin-gonic/gin"
-	"github.com/pierre-emmanuelJ/iptv-proxy/pkg/utils"
 )
 
 var defaultUserAgent = "go.xstream-codes (Go-http-client/1.1)"
-
-var useAdvancedParsing bool
-
-func init() {
-	// Use advanced parsing by default, unless legacy parsing is explicitly enabled
-	useAdvancedParsing = os.Getenv("USE_XTREAM_LEGACY_PARSING") != "true"
-}
 
 // XtreamClient is the client used to communicate with a Xtream-Codes server.
 type XtreamClient struct {
@@ -73,7 +60,7 @@ func NewClient(username, password, baseURL string) (*XtreamClient, error) {
 	a := &AuthenticationResponse{}
 
 	if jsonErr := json.Unmarshal(authData, &a); jsonErr != nil {
-		return nil, utils.PrintErrorAndReturn(fmt.Errorf("error unmarshaling json: %s", jsonErr.Error()))
+		return nil, fmt.Errorf("error unmarshaling json: %s", jsonErr.Error())
 	}
 
 	client.ServerInfo = a.ServerInfo
@@ -161,35 +148,13 @@ func (c *XtreamClient) GetCategories(catType string) ([]Category, error) {
 
 	cats := make([]Category, 0)
 
-	if useAdvancedParsing {
-		_, jsonErr := jsonparser.ArrayEach(catData, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
-			if err != nil {
-				utils.PrintErrorAndReturn(err)
-				return
-			}
+	jsonErr := json.Unmarshal(catData, &cats)
 
-			cat := Category{
-				Fields: value, // Directly assign the raw JSON bytes
-			}
-			cats = append(cats, cat)
-		})
-
-		return cats, jsonErr
-	} else {
-		debugLog("- GetCategories using Legacy Parsing for: []Category")
-
-		jsonErr := json.Unmarshal(catData, &cats)
-		if jsonErr != nil {
-			utils.PrintErrorAndReturn(jsonErr)
-		}
-
-		for idx := range cats {
-			cats[idx].Type = catType
-		}
-
-		return cats, jsonErr
+	for idx := range cats {
+		cats[idx].Type = catType
 	}
 
+	return cats, jsonErr
 }
 
 // GetLiveStreams will return a slice of live streams.
@@ -225,59 +190,15 @@ func (c *XtreamClient) GetStreams(streamAction, categoryID string) ([]Stream, er
 
 	streams := make([]Stream, 0)
 
-	if useAdvancedParsing {
-		_, jsonErr := jsonparser.ArrayEach(streamData, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
-			if err != nil {
-				utils.PrintErrorAndReturn(err)
-				return
-			}
-
-			stream := Stream{
-				Fields: value,
-			}
-
-			streams = append(streams, stream)
-
-			// The below code is to replicate the behavior of the old code:
-			//   c.streams[int(stream.ID)] = stream
-
-			streamID, _, _, err := jsonparser.Get(value, StreamFieldID)
-			if err != nil {
-				streamID = []byte("0")
-			}
-			streamType, _, _, err := jsonparser.Get(value, StreamFieldType)
-			if err != nil {
-				streamType = []byte("live")
-			}
-
-			// Now you can use streamID and streamType as []byte
-			// To convert to string if needed:
-			streamTypeStr := string(streamType)
-
-			var flexID FlexInt
-			flexID.UnmarshalJSON(streamID)
-
-			s := Stream{
-				ID:   flexID,
-				Type: streamTypeStr,
-			}
-			c.streams[int(s.ID)] = s
-		})
-
-		return streams, jsonErr
-	} else {
-		debugLog("- GetStreams using Legacy Parsing for: []Stream")
-
-		if jsonErr := json.Unmarshal(streamData, &streams); jsonErr != nil {
-			return nil, utils.PrintErrorAndReturn(jsonErr)
-		}
-
-		for _, stream := range streams {
-			c.streams[int(stream.ID)] = stream
-		}
-
-		return streams, nil
+	if jsonErr := json.Unmarshal(streamData, &streams); jsonErr != nil {
+		return nil, jsonErr
 	}
+
+	for _, stream := range streams {
+		c.streams[int(stream.ID)] = stream
+	}
+
+	return streams, nil
 }
 
 // GetSeries will return a slice of all available Series.
@@ -296,31 +217,11 @@ func (c *XtreamClient) GetSeries(categoryID string) ([]SeriesInfo, error) {
 
 	seriesInfos := make([]SeriesInfo, 0)
 
-	if useAdvancedParsing {
-		_, jsonErr := jsonparser.ArrayEach(seriesData, func(value []byte, dataType jsonparser.ValueType, offset int, err error) {
-			if err != nil {
-				utils.PrintErrorAndReturn(err)
-				return
-			}
-
-			seriesInfo := SeriesInfo{
-				Fields: value,
-			}
-
-			seriesInfos = append(seriesInfos, seriesInfo)
-		})
-
-		return seriesInfos, jsonErr
-	} else {
-		debugLog("- GetSeries using Legacy Parsing for: []SeriesInfo")
-
-		jsonErr := json.Unmarshal(seriesData, &seriesInfos)
-		if jsonErr != nil {
-			utils.PrintErrorAndReturn(jsonErr)
-		}
-
-		return seriesInfos, jsonErr
+	if jsonErr := json.Unmarshal(seriesData, &seriesInfos); jsonErr != nil {
+		return nil, jsonErr
 	}
+
+	return seriesInfos, nil
 }
 
 // GetSeriesInfo will return a series info for the given seriesID.
@@ -334,24 +235,11 @@ func (c *XtreamClient) GetSeriesInfo(seriesID string) (*Series, error) {
 		return nil, seriesErr
 	}
 
-	if useAdvancedParsing {
-		seriesInfo := &Series{
-			Fields: seriesData,
-		}
+	seriesInfo := &Series{}
 
-		return seriesInfo, nil
-	} else {
-		debugLog("- GetSeriesInfo using Legacy Parsing for: Series")
+	jsonErr := json.Unmarshal(seriesData, &seriesInfo)
 
-		seriesInfo := &Series{}
-
-		jsonErr := json.Unmarshal(seriesData, &seriesInfo)
-		if jsonErr != nil {
-			utils.PrintErrorAndReturn(jsonErr)
-		}
-
-		return seriesInfo, jsonErr
-	}
+	return seriesInfo, jsonErr
 }
 
 // GetVideoOnDemandInfo will return VOD info for the given vodID.
@@ -365,23 +253,11 @@ func (c *XtreamClient) GetVideoOnDemandInfo(vodID string) (*VideoOnDemandInfo, e
 		return nil, vodErr
 	}
 
-	if useAdvancedParsing {
-		vodInfo := &VideoOnDemandInfo{
-			Fields: vodData,
-		}
+	vodInfo := &VideoOnDemandInfo{}
 
-		return vodInfo, nil
-	} else {
-		debugLog("- GetVideoOnDemandInfo using Legacy Parsing for: VideoOnDemandInfo")
+	jsonErr := json.Unmarshal(vodData, &vodInfo)
 
-		vodInfo := &VideoOnDemandInfo{}
-
-		jsonErr := json.Unmarshal(vodData, &vodInfo)
-		if jsonErr != nil {
-			utils.PrintErrorAndReturn(jsonErr)
-		}
-		return vodInfo, jsonErr
-	}
+	return vodInfo, jsonErr
 }
 
 // GetShortEPG returns a short version of the EPG for the given streamID. If no limit is provided, the next 4 items in the EPG will be returned.
@@ -422,23 +298,14 @@ func (c *XtreamClient) getEPG(action, streamID string, limit int) ([]EPGInfo, er
 	epgContainer := &epgContainer{}
 
 	jsonErr := json.Unmarshal(epgData, &epgContainer)
-	if jsonErr != nil {
-		utils.PrintErrorAndReturn(jsonErr)
-	}
 
 	return epgContainer.EPGListings, jsonErr
 }
 
 func (c *XtreamClient) sendRequest(action string, parameters url.Values) ([]byte, error) {
-	data, _, err := c.sendRequestWithURL(action, parameters)
-	return data, err
-}
-
-func (c *XtreamClient) sendRequestWithURL(action string, parameters url.Values) ([]byte, string, error) {
 	file := "player_api.php"
 	if action == "xmltv.php" {
 		file = action
-		action = ""
 	}
 	url := fmt.Sprintf("%s/%s?username=%s&password=%s", c.BaseURL, file, c.Username, c.Password)
 	if action != "" {
@@ -450,7 +317,7 @@ func (c *XtreamClient) sendRequestWithURL(action string, parameters url.Values) 
 
 	request, httpErr := http.NewRequest("GET", url, nil)
 	if httpErr != nil {
-		return nil, url, httpErr
+		return nil, httpErr
 	}
 
 	request.Header.Set("User-Agent", c.UserAgent)
@@ -459,33 +326,21 @@ func (c *XtreamClient) sendRequestWithURL(action string, parameters url.Values) 
 
 	response, httpErr := c.HTTP.Do(request)
 	if httpErr != nil {
-		return nil, url, fmt.Errorf("cannot reach server. %v", httpErr)
+		return nil, fmt.Errorf("cannot reach server. %v", httpErr)
 	}
 
 	if response.StatusCode > 399 {
-		return nil, url, fmt.Errorf("status code was %d, expected 2XX-3XX", response.StatusCode)
+		return nil, fmt.Errorf("status code was %d, expected 2XX-3XX", response.StatusCode)
 	}
 
 	buf := &bytes.Buffer{}
 	if _, copyErr := io.Copy(buf, response.Body); copyErr != nil {
-		return nil, url, copyErr
+		return nil, copyErr
 	}
 
 	if closeErr := response.Body.Close(); closeErr != nil {
-		return nil, url, fmt.Errorf("cannot read response. %v", closeErr)
+		return nil, fmt.Errorf("cannot read response. %v", closeErr)
 	}
 
-	// Create a mock gin.Context for the WriteResponseToFile function
-	mockCtx := &gin.Context{
-		Request: &http.Request{
-			URL: request.URL,
-		},
-	}
-
-	contentType := strings.Split(response.Header.Get("Content-Type"), ";")[0]
-
-	// Write response to file
-	utils.WriteResponseToFile(mockCtx, buf.Bytes(), contentType)
-
-	return buf.Bytes(), url, nil
+	return buf.Bytes(), nil
 }
