@@ -193,12 +193,12 @@ func (c *Config) xtreamPlayerAPIGET(ctx *gin.Context) { c.xtreamPlayerAPI(ctx, c
 func (c *Config) xtreamPlayerAPIPOST(ctx *gin.Context) {
     contents, err := io.ReadAll(ctx.Request.Body)
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
     q, err := url.ParseQuery(string(contents))
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
     c.xtreamPlayerAPI(ctx, q)

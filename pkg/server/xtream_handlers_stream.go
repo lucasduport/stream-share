@@ -101,7 +101,7 @@ func (c *Config) xtreamStream(ctx *gin.Context, oriURL *url.URL) {
     }
 
     m3uURL, err := url.Parse(rawURL)
-    if err != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
+    if err != nil { _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err)); return }
 
     xtreamM3uCacheLock.RLock()
     meta, ok := xtreamM3uCache[m3uURL.String()]
