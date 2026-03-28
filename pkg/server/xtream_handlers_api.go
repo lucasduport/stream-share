@@ -155,23 +155,23 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 
     client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
     if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
     }
 
     resp, httpcode, contentType, err := client.Action(c.ProxyConfig, action, q)
     if err != nil {
-        ctx.AbortWithError(httpcode, utils.PrintErrorAndReturn(err))
+        _ = ctx.AbortWithError(httpcode, utils.PrintErrorAndReturn(err))
         return
     }
 
     if contentType == "application/json" {
         if s, ok := resp.(string); ok && strings.TrimSpace(s) == "" {
-            ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
+            _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
             return
         }
         if b, ok := resp.([]byte); ok && len(bytes.TrimSpace(b)) == 0 {
-            ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
+            _ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("Xtream backend returned empty JSON response for action: %s", action)))
             return
         }
     }
