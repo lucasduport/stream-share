@@ -34,7 +34,10 @@ import (
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
-// SessionManager handles user sessions and stream multiplexing
+// SessionManager handles user sessions and stream multiplexing.
+// Lock ordering (always acquire in this order to avoid deadlock):
+//
+//	userLock → streamLock
 type SessionManager struct {
 	userSessions     map[string]*types.UserSession     // username -> session
 	streamSessions   map[string]*types.StreamSession   // streamID -> session
@@ -49,6 +52,7 @@ type SessionManager struct {
 	streamTimeout    time.Duration
 	tempLinkTimeout  time.Duration
 	httpClient       *http.Client
+	stopChan         chan struct{} // closed by Stop() to terminate background goroutines
 }
 
 // StreamBuffer handles buffering and distribution of stream data
@@ -87,6 +91,7 @@ func NewSessionManager(db *database.DBManager) *SessionManager {
 		sessionTimeout:  30 * time.Minute,
 		streamTimeout:   2 * time.Minute,  // Time after which an unused stream is closed
 		tempLinkTimeout: 24 * time.Hour,
+		stopChan:        make(chan struct{}),
 		httpClient: &http.Client{
 			// No global Timeout: long-running streams must not be cut after 60s
 			Transport: &http.Transport{
@@ -99,18 +104,29 @@ func NewSessionManager(db *database.DBManager) *SessionManager {
 		},
 	}
 
-	// Start cleanup routines
+	// Start cleanup routine (stopped by Stop())
 	go manager.cleanupRoutine()
 
 	return manager
 }
 
-// cleanupRoutine periodically removes expired sessions and links
+// Stop terminates all background goroutines started by the session manager.
+func (sm *SessionManager) Stop() {
+	close(sm.stopChan)
+}
+
+// cleanupRoutine periodically removes expired sessions and links.
+// It exits when sm.stopChan is closed.
 func (sm *SessionManager) cleanupRoutine() {
 	ticker := time.NewTicker(sm.cleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-sm.stopChan:
+			return
+		case <-ticker.C:
+		}
 		sm.cleanupExpiredSessions()
 		sm.cleanupUnusedStreams()
 		
@@ -212,15 +228,15 @@ func (sm *SessionManager) RegisterUser(username, ip, userAgent string) *types.Us
 
 // GetUserSession retrieves a user session if it exists
 func (sm *SessionManager) GetUserSession(username string) *types.UserSession {
-	sm.userLock.RLock()
-	defer sm.userLock.RUnlock()
-	
+	// Use Lock (not RLock) because we mutate LastActive below.
+	sm.userLock.Lock()
+	defer sm.userLock.Unlock()
+
 	session, exists := sm.userSessions[username]
 	if !exists {
 		return nil
 	}
-	
-	// Update last active time
+
 	session.LastActive = time.Now()
 	return session
 }
@@ -413,16 +429,21 @@ func (sm *SessionManager) serveClient(buffer *StreamBuffer, username string) {
 	}
 
 EXIT:
-	// Close the outgoing data channel to signal HTTP writer to finish
+	// Close the outgoing data channel to signal the HTTP writer to finish.
+	// Use the locally captured `ch` reference rather than a map lookup: RemoveClient
+	// deletes the entry from clients without closing, so a map lookup would miss it
+	// and the HTTP writer goroutine would block forever.
 	buffer.clientsLock.Lock()
-	if ch, ok := buffer.clients[username]; ok {
-		close(ch)
+	if ch != nil {
+		if _, stillInMap := buffer.clients[username]; stillInMap {
+			close(ch)
+		}
+		// Always remove from map regardless; if already removed that is a no-op.
 		delete(buffer.clients, username)
 	}
-	if d, ok := buffer.clientDone[username]; ok {
-		close(d) // idempotent close guarded by ok if already closed elsewhere
-		delete(buffer.clientDone, username)
-	}
+	// Clean up done channel entry. Do NOT close it here — it may have already been
+	// closed by RemoveClient or stopStream; just remove the map entry.
+	delete(buffer.clientDone, username)
 	buffer.clientsLock.Unlock()
 }
 

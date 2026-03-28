@@ -42,10 +42,17 @@ func buildLabelForVOD(r types.VODResult) string {
     return label
 }
 
+// asciiTitle uppercases the first ASCII byte of s. Used instead of the
+// deprecated strings.Title which does not handle Unicode correctly.
+func asciiTitle(s string) string {
+    if s == "" { return s }
+    return strings.ToUpper(s[:1]) + s[1:]
+}
+
 // buildDescriptionForVOD builds the select option description (must be <=100 runes)
 func buildDescriptionForVOD(r types.VODResult) string {
     parts := []string{}
-    if r.StreamType != "" { parts = append(parts, strings.Title(r.StreamType)) }
+    if r.StreamType != "" { parts = append(parts, asciiTitle(r.StreamType)) }
     if r.Category != "" { parts = append(parts, r.Category) }
     if r.Size != "" { parts = append(parts, r.Size) }
     if r.Rating != "" { parts = append(parts, "⭐ "+r.Rating) }

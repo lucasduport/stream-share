@@ -183,7 +183,8 @@ func (c *Config) enrichVODPage(ctx *gin.Context) {
 				if ext := extIndex[streamID]; ext != "" { finalID += ext } else if path.Ext(finalID) == "" { if basePath == "series" { finalID += ".mkv" } else { finalID += ".mp4" } }
 				vodURL := fmt.Sprintf("%s/%s/%s/%s/%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, finalID)
 				// Range GET
-				reqHTTP, _ := http.NewRequest("GET", vodURL, nil)
+				reqHTTP, reqErr := http.NewRequest("GET", vodURL, nil)
+				if reqErr != nil { continue }
 				reqHTTP.Header.Set("Range", "bytes=0-0")
 				reqHTTP.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 				reqHTTP.Header.Set("Accept-Encoding", "identity")
@@ -356,42 +357,50 @@ func (c *Config) pickVODExtension(ctx *gin.Context, basePath, streamID string) s
 	}
 	client := &http.Client{ Timeout: 3 * time.Second }
 	for _, ext := range order {
-		url := fmt.Sprintf("%s/%s/%s/%s/%s%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, streamID, ext)
-		req, _ := http.NewRequestWithContext(context.Background(), "HEAD", url, nil)
+		probeURL := fmt.Sprintf("%s/%s/%s/%s/%s%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, streamID, ext)
+		req, reqErr := http.NewRequestWithContext(context.Background(), "HEAD", probeURL, nil)
+		if reqErr != nil {
+			utils.DebugLog("VOD probe: failed to build HEAD request for %s: %v", utils.MaskURL(probeURL), reqErr)
+			continue
+		}
 		req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 		req.Header.Set("Accept-Encoding", "identity")
 		req.Header.Set("Accept", "*/*")
 		resp, err := client.Do(req)
-		if err != nil { 
+		if err != nil {
 			// Providers often RST HEAD; keep this low-noise
-			utils.DebugLog("VOD probe skipped/noisy for %s: %v", utils.MaskURL(url), err)
-			continue 
+			utils.DebugLog("VOD probe skipped/noisy for %s: %v", utils.MaskURL(probeURL), err)
+			continue
 		}
 		resp.Body.Close()
 		// Accept 2xx and 206
 		if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusPartialContent {
-			utils.DebugLog("VOD probe (HEAD) ok %d for %s", resp.StatusCode, utils.MaskURL(url))
+			utils.DebugLog("VOD probe (HEAD) ok %d for %s", resp.StatusCode, utils.MaskURL(probeURL))
 			return ext
 		}
 		// Some providers return non-standard 461 or block HEAD; try GET range fallback
-	if resp.StatusCode == 461 || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest {
-			utils.DebugLog("VOD probe (HEAD) status %d for %s, trying GET range fallback", resp.StatusCode, utils.MaskURL(url))
-			getReq, _ := http.NewRequestWithContext(context.Background(), "GET", url, nil)
+		if resp.StatusCode == 461 || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest {
+			utils.DebugLog("VOD probe (HEAD) status %d for %s, trying GET range fallback", resp.StatusCode, utils.MaskURL(probeURL))
+			getReq, getReqErr := http.NewRequestWithContext(context.Background(), "GET", probeURL, nil)
+			if getReqErr != nil {
+				utils.DebugLog("VOD probe: failed to build GET request for %s: %v", utils.MaskURL(probeURL), getReqErr)
+				continue
+			}
 			getReq.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 			getReq.Header.Set("Range", "bytes=0-0")
 			if getResp, getErr := client.Do(getReq); getErr == nil {
 				_, _ = io.Copy(io.Discard, getResp.Body)
 				getResp.Body.Close()
 				if (getResp.StatusCode >= 200 && getResp.StatusCode < 300) || getResp.StatusCode == http.StatusPartialContent {
-					utils.DebugLog("VOD probe (GET range) ok %d for %s", getResp.StatusCode, utils.MaskURL(url))
+					utils.DebugLog("VOD probe (GET range) ok %d for %s", getResp.StatusCode, utils.MaskURL(probeURL))
 					return ext
 				}
-				utils.DebugLog("VOD probe (GET range) status %d for %s", getResp.StatusCode, utils.MaskURL(url))
+				utils.DebugLog("VOD probe (GET range) status %d for %s", getResp.StatusCode, utils.MaskURL(probeURL))
 			} else {
-		utils.DebugLog("VOD probe (GET range) noisy for %s: %v", utils.MaskURL(url), getErr)
+				utils.DebugLog("VOD probe (GET range) noisy for %s: %v", utils.MaskURL(probeURL), getErr)
 			}
 		} else {
-			utils.DebugLog("VOD probe (HEAD) status %d for %s", resp.StatusCode, utils.MaskURL(url))
+			utils.DebugLog("VOD probe (HEAD) status %d for %s", resp.StatusCode, utils.MaskURL(probeURL))
 		}
 	}
 	return ".mp4"
@@ -627,6 +636,16 @@ func (c *Config) listCache(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, types.APIResponse{Success:true, Data: out})
 }
 
+// vodCacheClient is used exclusively by fetchToFile. No global timeout so large files
+// can be downloaded fully; transport-level timeouts prevent infinite stalls.
+var vodCacheClient = &http.Client{
+	Transport: &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    true,
+	},
+}
+
 // fetchToFile downloads from upstream URL to a local file; marks DB entry ready/failed
 func (c *Config) fetchToFile(upstream, dest, streamID string, expires time.Time) {
 	utils.InfoLog("Caching start: %s -> %s", utils.MaskURL(upstream), dest)
@@ -636,9 +655,10 @@ func (c *Config) fetchToFile(upstream, dest, streamID string, expires time.Time)
 	if err != nil { utils.ErrorLog("Cache: create file error: %v", err); c.cacheFail(streamID); return }
 	defer f.Close()
 	// Request with UA and support for resume in future
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", upstream, nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", upstream, nil)
+	if err != nil { utils.ErrorLog("Cache: failed to build request: %v", err); c.cacheFail(streamID); return }
 	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := vodCacheClient.Do(req)
 	if err != nil { utils.ErrorLog("Cache: upstream error: %v", err); c.cacheFail(streamID); return }
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

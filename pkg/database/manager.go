@@ -42,10 +42,11 @@ func NewDBManager(_ string) (*DBManager, error) {
     dbName := utils.GetEnvOrDefault("DB_NAME", "iptvproxy")
     user := utils.GetEnvOrDefault("DB_USER", "postgres")
     password := utils.GetEnvOrDefault("DB_PASSWORD", "")
+    sslMode := utils.GetEnvOrDefault("DB_SSLMODE", "disable")
 
     connStr := fmt.Sprintf(
-        "host=%s port=%s dbname=%s user=%s password=%s sslmode=disable",
-        host, port, dbName, user, password,
+        "host=%s port=%s dbname=%s user=%s password=%s sslmode=%s",
+        host, port, dbName, user, password, sslMode,
     )
 
     utils.DebugLog("Connecting to PostgreSQL: host=%s port=%s dbname=%s user=%s", host, port, dbName, user)

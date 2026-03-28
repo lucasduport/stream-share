@@ -20,6 +20,7 @@ package database
 
 import (
     "database/sql"
+    "errors"
     "fmt"
 
     "github.com/lucasduport/stream-share/pkg/utils"
@@ -62,7 +63,7 @@ func (m *DBManager) GetLDAPUserByDiscordID(discordID string) (string, error) {
         WHERE discord_id = $1
     `, discordID).Scan(&ldapUsername)
 
-    if err == sql.ErrNoRows {
+    if errors.Is(err, sql.ErrNoRows) {
         utils.DebugLog("No LDAP user found for Discord ID %s", discordID)
         return "", fmt.Errorf("no LDAP user linked to Discord ID %s", discordID)
     }
@@ -87,7 +88,7 @@ func (m *DBManager) GetDiscordByLDAPUser(ldapUsername string) (string, string, e
         WHERE ldap_username = $1
     `, ldapUsername).Scan(&discordID, &discordName)
 
-    if err == sql.ErrNoRows {
+    if errors.Is(err, sql.ErrNoRows) {
         utils.DebugLog("No Discord account linked to LDAP user %s", ldapUsername)
         return "", "", fmt.Errorf("no Discord account linked to LDAP user %s", ldapUsername)
     }

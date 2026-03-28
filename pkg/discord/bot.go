@@ -109,14 +109,15 @@ func NewBot(token, adminRoleID, apiURL, apiKey string) (*Bot, error) {
 	}
 
 	bot := &Bot{
-		session:         dg,
-		token:           token,
-		adminRoleID:     adminRoleID,
-		apiURL:          strings.TrimSuffix(apiURL, "/"),
-		apiKey:          apiKey,
-		cleanupInterval: 30 * time.Minute,
-		client:          &http.Client{Timeout: 10 * time.Second},
+		session:          dg,
+		token:            token,
+		adminRoleID:      adminRoleID,
+		apiURL:           strings.TrimSuffix(apiURL, "/"),
+		apiKey:           apiKey,
+		cleanupInterval:  30 * time.Minute,
+		client:           &http.Client{Timeout: 10 * time.Second},
 		pendingVODSelect: make(map[string]*vodSelectContext),
+		stopChan:         make(chan struct{}),
 	}
 
 	// Optional: dev guild for registering guild-scoped commands during development
@@ -168,9 +169,10 @@ func (b *Bot) Start() error {
 	return nil
 }
 
-// Stop stops the Discord bot
+// Stop stops the Discord bot and its background goroutines.
 func (b *Bot) Stop() {
 	utils.InfoLog("Stopping Discord bot")
+	close(b.stopChan)
 	// Attempt to delete commands (guild-scoped for fast iteration)
 	if err := b.unregisterSlashCommands(); err != nil {
 		utils.WarnLog("Failed to unregister slash commands: %v", err)
@@ -178,12 +180,20 @@ func (b *Bot) Stop() {
 	b.session.Close()
 }
 
-// cleanupRoutine periodically cleans up expired data
+// cleanupRoutine periodically cleans up expired data.
+// It exits when b.stopChan is closed.
 func (b *Bot) cleanupRoutine() {
 	ticker := time.NewTicker(b.cleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C { b.cleanupExpiredVODSelects() }
+	for {
+		select {
+		case <-b.stopChan:
+			return
+		case <-ticker.C:
+			b.cleanupExpiredVODSelects()
+		}
+	}
 }
 
 // cleanupExpiredVODSelects removes old interactive contexts to prevent leaks

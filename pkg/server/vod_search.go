@@ -150,7 +150,8 @@ func (c *Config) searchXtreamVOD(query string) ([]types.VODResult, error) {
 					}
 					vodURL := fmt.Sprintf("%s/%s/%s/%s/%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, finalID)
 					// GET with Range
-					req, _ := http.NewRequest("GET", vodURL, nil)
+					req, err := http.NewRequest("GET", vodURL, nil)
+					if err != nil { continue }
 					req.Header.Set("Range", "bytes=0-0")
 					req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 					req.Header.Set("Accept-Encoding", "identity")

@@ -136,11 +136,21 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
     id := ctx.Param("id")
     // Normalize DB key: cached entries are stored by bare stream_id without extension
     idRaw := strings.TrimSuffix(id, path.Ext(id))
+    // Reject IDs containing path separators or dot-dot to prevent path traversal.
+    if strings.Contains(idRaw, "/") || strings.Contains(idRaw, "..") {
+        utils.ErrorLog("Rejected stream ID with path traversal characters: %q", idRaw)
+        ctx.AbortWithStatus(http.StatusBadRequest)
+        return
+    }
     if c.sessionManager != nil {
         username := ctx.GetString("username")
         if username == "" { username = ctx.Param("username") }
         if username != "" {
-            c.sessionManager.RegisterVODView(username, idRaw, "movie", idRaw)
+            movieTitle := idRaw
+            if name, ok := c.getChannelNameByID(idRaw); ok && strings.TrimSpace(name) != "" {
+                movieTitle = name
+            }
+            c.sessionManager.RegisterVODView(username, idRaw, "movie", movieTitle)
             defer c.sessionManager.UnregisterVODView(username, idRaw)
         }
     }
@@ -176,7 +186,7 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
         // Insert pending entry
-        _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "movie", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
+        if err := c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "movie", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()}); err != nil { utils.ErrorLog("Failed to record movie cache entry for %s: %v", idRaw, err) }
         if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
             go func() {
                 defer c.inProgressDownloads.Delete(idRaw)
@@ -198,11 +208,21 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
 func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
     id := ctx.Param("id")
     idRaw := strings.TrimSuffix(id, path.Ext(id))
+    // Reject IDs containing path separators or dot-dot to prevent path traversal.
+    if strings.Contains(idRaw, "/") || strings.Contains(idRaw, "..") {
+        utils.ErrorLog("Rejected stream ID with path traversal characters: %q", idRaw)
+        ctx.AbortWithStatus(http.StatusBadRequest)
+        return
+    }
     if c.sessionManager != nil {
         username := ctx.GetString("username")
         if username == "" { username = ctx.Param("username") }
         if username != "" {
-            c.sessionManager.RegisterVODView(username, idRaw, "series", idRaw)
+            seriesTitle := idRaw
+            if name, ok := c.getChannelNameByID(idRaw); ok && strings.TrimSpace(name) != "" {
+                seriesTitle = name
+            }
+            c.sessionManager.RegisterVODView(username, idRaw, "series", seriesTitle)
             defer c.sessionManager.UnregisterVODView(username, idRaw)
         }
     }
@@ -234,7 +254,7 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
         _ = os.MkdirAll(cacheDir, 0o755)
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
-        _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "series", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
+        if err := c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "series", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()}); err != nil { utils.ErrorLog("Failed to record series cache entry for %s: %v", idRaw, err) }
         if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
             go func() {
                 defer c.inProgressDownloads.Delete(idRaw)
@@ -271,12 +291,22 @@ func (c *Config) xtreamProxyCredentialsLiveStreamHandler(ctx *gin.Context) {
 func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
     id := ctx.Param("id")
     idRaw := strings.TrimSuffix(id, path.Ext(id))
+    // Reject IDs containing path separators or dot-dot to prevent path traversal.
+    if strings.Contains(idRaw, "/") || strings.Contains(idRaw, "..") {
+        utils.ErrorLog("Rejected stream ID with path traversal characters: %q", idRaw)
+        ctx.AbortWithStatus(http.StatusBadRequest)
+        return
+    }
     utils.DebugLog("Direct movie stream request with proxy credentials: username=%s, id=%s", ctx.Param("username"), id)
     if c.sessionManager != nil {
         username := ctx.GetString("username")
         if username == "" { username = ctx.Param("username") }
         if username != "" {
-            c.sessionManager.RegisterVODView(username, idRaw, "movie", idRaw)
+            movieTitle := idRaw
+            if name, ok := c.getChannelNameByID(idRaw); ok && strings.TrimSpace(name) != "" {
+                movieTitle = name
+            }
+            c.sessionManager.RegisterVODView(username, idRaw, "movie", movieTitle)
             defer c.sessionManager.UnregisterVODView(username, idRaw)
         }
     }
@@ -308,7 +338,7 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
         _ = os.MkdirAll(cacheDir, 0o755)
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
-        _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "movie", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
+        if err := c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "movie", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()}); err != nil { utils.ErrorLog("Failed to record movie cache entry for %s: %v", idRaw, err) }
         if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
             go func() {
                 defer c.inProgressDownloads.Delete(idRaw)
@@ -328,12 +358,22 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
 func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
     id := ctx.Param("id")
     idRaw := strings.TrimSuffix(id, path.Ext(id))
+    // Reject IDs containing path separators or dot-dot to prevent path traversal.
+    if strings.Contains(idRaw, "/") || strings.Contains(idRaw, "..") {
+        utils.ErrorLog("Rejected stream ID with path traversal characters: %q", idRaw)
+        ctx.AbortWithStatus(http.StatusBadRequest)
+        return
+    }
     utils.DebugLog("Direct series stream request with proxy credentials: username=%s, id=%s", ctx.Param("username"), id)
     if c.sessionManager != nil {
         username := ctx.GetString("username")
         if username == "" { username = ctx.Param("username") }
         if username != "" {
-            c.sessionManager.RegisterVODView(username, idRaw, "series", idRaw)
+            seriesTitle := idRaw
+            if name, ok := c.getChannelNameByID(idRaw); ok && strings.TrimSpace(name) != "" {
+                seriesTitle = name
+            }
+            c.sessionManager.RegisterVODView(username, idRaw, "series", seriesTitle)
             defer c.sessionManager.UnregisterVODView(username, idRaw)
         }
     }
@@ -364,7 +404,7 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
         _ = os.MkdirAll(cacheDir, 0o755)
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
-        _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "series", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
+        if err := c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "series", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()}); err != nil { utils.ErrorLog("Failed to record series cache entry for %s: %v", idRaw, err) }
         if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
             go func() {
                 defer c.inProgressDownloads.Delete(idRaw)

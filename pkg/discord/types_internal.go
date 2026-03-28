@@ -37,6 +37,7 @@ type Bot struct {
     client          *http.Client
 
     cleanupInterval time.Duration
+    stopChan        chan struct{} // closed by Stop() to terminate background goroutines
 
     // Component-based selection contexts
     pendingVODSelect map[string]*vodSelectContext // messageID -> selection context

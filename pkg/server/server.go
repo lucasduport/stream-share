@@ -395,11 +395,29 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	} else if strings.Contains(p, "/timeshift/") {
 		streamType = "timeshift"
 	}
+	// Fallback: check incoming request path for type hints.
+	// The generic /:user/:pass/:id route maps to live streams in Xtream protocol.
+	if streamType == "unknown" {
+		reqPath := ctx.Request.URL.Path
+		if strings.Contains(reqPath, "/movie/") {
+			streamType = "movie"
+		} else if strings.Contains(reqPath, "/series/") {
+			streamType = "series"
+		} else if strings.Contains(reqPath, "/live/") {
+			streamType = "live"
+		} else {
+			streamType = "live"
+		}
+	}
 
-	// Title from query parameter or fallback to stream ID
+	// Title from query parameter, M3U index lookup, or fallback to stream ID
 	streamTitle := targetURL.Query().Get("title")
 	if streamTitle == "" {
-		streamTitle = streamID
+		if name, ok := c.getChannelNameByID(streamIDRaw); ok && strings.TrimSpace(name) != "" {
+			streamTitle = name
+		} else {
+			streamTitle = streamID
+		}
 	}
 
 	utils.DebugLog("Multiplexed stream request: user=%s, id=%s, type=%s, title=%s, upstream=%s",
