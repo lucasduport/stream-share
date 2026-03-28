@@ -21,7 +21,7 @@ package server
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -127,7 +127,7 @@ func (c *Config) authenticate(ctx *gin.Context) {
 func (c *Config) appAuthenticate(ctx *gin.Context) {
     utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL)
 
-    contents, err := ioutil.ReadAll(ctx.Request.Body)
+    contents, err := io.ReadAll(ctx.Request.Body)
     if err != nil {
         ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
         return
@@ -170,7 +170,7 @@ func (c *Config) appAuthenticate(ctx *gin.Context) {
         return
     }
 
-    ctx.Request.Body = ioutil.NopCloser(bytes.NewReader(contents))
+    ctx.Request.Body = io.NopCloser(bytes.NewReader(contents))
 }
 
 // ldapAuthenticate binds with an optional service account, finds the user DN,

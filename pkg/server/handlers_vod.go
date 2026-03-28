@@ -670,7 +670,6 @@ func (c *Config) fetchToFile(upstream, dest, streamID string, expires time.Time)
 		}
 	}
 	n := downloaded
-	if err != nil { utils.ErrorLog("Cache: copy error: %v", err); c.cacheFail(streamID); return }
 	if err := f.Sync(); err != nil { utils.WarnLog("Cache: fsync warning: %v", err) }
 	if err := os.Rename(tmp, dest); err != nil { utils.ErrorLog("Cache: rename error: %v", err); c.cacheFail(streamID); return }
 	utils.InfoLog("Caching done: %s (%s)", dest, utils.HumanBytes(n))

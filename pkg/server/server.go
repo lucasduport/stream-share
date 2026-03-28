@@ -29,8 +29,9 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
-	"time"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/jamesnetherton/m3u"
@@ -64,6 +65,9 @@ type Config struct {
 	sessionManager *session.SessionManager
 	db             *database.DBManager
 	discordBot     *discord.Bot
+
+	// inProgressDownloads guards against concurrent duplicate fetchToFile goroutines
+	inProgressDownloads sync.Map
 }
 
 // NewServer initializes a new server configuration with all necessary components.
@@ -92,14 +96,14 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 
 	// Create server configuration
 	serverConfig := &Config{
-		config,
-		&p,
-		nil,
-		defaultProxyfiedM3UPath,
-		customID,
-		nil,
-		nil,
-		nil,
+		ProxyConfig:          config,
+		playlist:             &p,
+		track:                nil,
+		proxyfiedM3UPath:     defaultProxyfiedM3UPath,
+		endpointAntiColision: customID,
+		sessionManager:       nil,
+		db:                   nil,
+		discordBot:           nil,
 	}
 
 	// Force PostgreSQL initialization (sqlite removed)

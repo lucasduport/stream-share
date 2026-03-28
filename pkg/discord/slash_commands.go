@@ -221,6 +221,10 @@ func toMessageCreateFromInteraction(i *discordgo.InteractionCreate, content stri
     } else if i.User != nil {
         mc.Author = i.User
         mc.GuildID = ""
+    } else {
+        // Fallback: empty user prevents nil dereference; handlers will fail gracefully
+        // (e.g. LDAP lookup returns no user → "Link your account" reply)
+        mc.Author = &discordgo.User{}
     }
     return mc
 }

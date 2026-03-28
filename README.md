@@ -123,9 +123,8 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 | `/cache <title> <days>` | Cache a movie or episode on the server for 1–14 days |
 | `/cached` | List cached items and expiration times |
 | `/status` | Show server status (admin only) |
-| `/help` | Display available commands |
-| `/disconnect <ldap_username>` | Disconnect user from the stream |
-| `/timeout <ldap_username> <duration>` | Set a timeout for user activity |
+| `/disconnect <ldap_username>` | Disconnect a user from the stream |
+| `/timeout <ldap_username> <minutes>` | Temporarily block a user for N minutes |
 
 Tips:
 - Link your account first with `/link <ldap_user>`.

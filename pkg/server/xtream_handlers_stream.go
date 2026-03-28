@@ -19,20 +19,19 @@
 package server
 
 import (
+    "errors"
     "fmt"
-    "io/ioutil"
+    "io"
+    "log"
     "net/http"
     "net/url"
     "os"
     "path"
     "path/filepath"
+    "strconv"
     "strings"
     "sync"
     "time"
-	"log"
-    "strconv"
-    "io"
-    "errors"
 
     "github.com/gin-gonic/gin"
     "github.com/jamesnetherton/m3u"
@@ -202,9 +201,11 @@ func (c *Config) xtreamStreamMovie(ctx *gin.Context) {
         expires := time.Now().Add(7 * 24 * time.Hour)
         // Insert pending entry
         _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "movie", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
-        // Start background download only if not already in progress
-        if _, err := os.Stat(dest+".part"); err != nil {
-            go c.fetchToFile(upstream, dest, idRaw, expires)
+        if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
+            go func() {
+                defer c.inProgressDownloads.Delete(idRaw)
+                c.fetchToFile(upstream, dest, idRaw, expires)
+            }()
         }
         // Serve progressively from growing file
         var ct string
@@ -250,8 +251,11 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
         _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "series", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
-        if _, err := os.Stat(dest+".part"); err != nil {
-            go c.fetchToFile(upstream, dest, idRaw, expires)
+        if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
+            go func() {
+                defer c.inProgressDownloads.Delete(idRaw)
+                c.fetchToFile(upstream, dest, idRaw, expires)
+            }()
         }
         var ct string
         if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
@@ -313,8 +317,11 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
         _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "movie", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
-        if _, err := os.Stat(dest+".part"); err != nil {
-            go c.fetchToFile(upstream, dest, idRaw, expires)
+        if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
+            go func() {
+                defer c.inProgressDownloads.Delete(idRaw)
+                c.fetchToFile(upstream, dest, idRaw, expires)
+            }()
         }
         var ct string
         if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
@@ -358,8 +365,11 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
         dest := filepath.Join(cacheDir, idRaw+resolvedExt)
         expires := time.Now().Add(7 * 24 * time.Hour)
         _ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: "series", FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()})
-        if _, err := os.Stat(dest+".part"); err != nil {
-            go c.fetchToFile(upstream, dest, idRaw, expires)
+        if _, loaded := c.inProgressDownloads.LoadOrStore(idRaw, struct{}{}); !loaded {
+            go func() {
+                defer c.inProgressDownloads.Delete(idRaw)
+                c.fetchToFile(upstream, dest, idRaw, expires)
+            }()
         }
         var ct string
         if ext := strings.ToLower(path.Ext(dest)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
@@ -409,7 +419,7 @@ func (c *Config) xtreamHlsStream(ctx *gin.Context) {
             if hlsDoErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsDoErr)); return }
             defer hlsResp.Body.Close()
 
-            b, readErr := ioutil.ReadAll(hlsResp.Body)
+            b, readErr := io.ReadAll(hlsResp.Body)
             if readErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(readErr)); return }
             body := string(b)
             body = strings.ReplaceAll(body, "/"+c.XtreamUser.String()+"/"+c.XtreamPassword.String()+"/", "/"+c.User.String()+"/"+c.Password.String()+"/")
@@ -449,7 +459,7 @@ func (c *Config) hlsXtreamStream(ctx *gin.Context, oriURL *url.URL) {
             if hlsDoErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(hlsDoErr)); return }
             defer hlsResp.Body.Close()
 
-            b, readErr := ioutil.ReadAll(hlsResp.Body)
+            b, readErr := io.ReadAll(hlsResp.Body)
             if readErr != nil { ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(readErr)); return }
             body := string(b)
             body = strings.ReplaceAll(body, "/"+c.XtreamUser.String()+"/"+c.XtreamPassword.String()+"/", "/"+c.User.String()+"/"+c.Password.String()+"/")

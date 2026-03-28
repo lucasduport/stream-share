@@ -64,6 +64,7 @@ type StreamBuffer struct {
 
 	// Stop signal for upstream reader
 	stopChan chan struct{}
+	stopOnce sync.Once
 
 	// Ring buffer allowing clients to read at their own pace
 	ringCap     int
@@ -82,7 +83,7 @@ func NewSessionManager(db *database.DBManager) *SessionManager {
 		streamBuffers:   make(map[string]*StreamBuffer),
 		tempLinks:       make(map[string]*types.TemporaryLink),
 		db:              db,
-		cleanupInterval: 5 * time.Minute,
+		cleanupInterval: 24 * time.Hour,
 		sessionTimeout:  30 * time.Minute,
 		streamTimeout:   2 * time.Minute,  // Time after which an unused stream is closed
 		tempLinkTimeout: 24 * time.Hour,
@@ -600,8 +601,8 @@ func (sm *SessionManager) stopStream(streamID string) {
 		return
 	}
 
-	// Signal upstream goroutine to stop
-	close(buffer.stopChan)
+	// Signal upstream goroutine to stop (Once prevents double-close panic)
+	buffer.stopOnce.Do(func() { close(buffer.stopChan) })
 	buffer.active = false
 
 	// Signal all clients to stop; each goroutine closes its data channel

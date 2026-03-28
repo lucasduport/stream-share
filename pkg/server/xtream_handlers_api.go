@@ -22,7 +22,7 @@ import (
     "bytes"
     "encoding/json"
     "fmt"
-    "io/ioutil"
+    "io"
     "net/http"
     "net/url"
     "strconv"
@@ -191,7 +191,7 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 func (c *Config) xtreamPlayerAPIGET(ctx *gin.Context) { c.xtreamPlayerAPI(ctx, ctx.Request.URL.Query()) }
 
 func (c *Config) xtreamPlayerAPIPOST(ctx *gin.Context) {
-    contents, err := ioutil.ReadAll(ctx.Request.Body)
+    contents, err := io.ReadAll(ctx.Request.Body)
     if err != nil {
         ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
         return
