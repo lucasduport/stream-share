@@ -1,273 +1,253 @@
-# Iptv Proxy
+# StreamShare - Advanced IPTV Access Management Platform
 
-[![Actions Status](https://github.com/pierre-emmanuelJ/iptv-proxy/workflows/CI/badge.svg)](https://github.com/pierre-emmanuelJ/iptv-proxy/actions?query=workflow%3ACI)
+## Overview
 
-NOTE: This fork of the [original project](https://github.com/pierre-emmanuelJ/iptv-proxy) contains the following enhancements:
+StreamShare is a comprehensive IPTV management solution that allows secure sharing of a single IPTV provider account with multiple users. Built upon the foundations of [jtdevops/iptv-proxy](https://github.com/jtdevops/iptv-proxy) and [pierre-emmanuelJ/iptv-proxy](https://github.com/pierre-emmanuelJ/iptv-proxy), this project has evolved far beyond a simple proxy to become a full-featured platform with authentication, stream multiplexing, and media management capabilities.
 
-- Corrected issue with Xtream Codes EPG not loading
-- Fixed issue with Xtream Codes VOD (Shows & Movies) as the IPTV provider returned data seems to be partially complete, or missing pieces that this proxy is expecting
+### Key Features
 
+- **Stream Multiplexing** - Share a single IPTV subscription with multiple users simultaneously
+- **Authentication Options**
+  - LDAP integration for enterprise user management
+  - Basic authentication for simpler setups
+- **Content Management**
+  - M3U/M3U8 playlist proxying with credential protection
+  - Xtream Codes API compatibility (live, VOD, series, EPG)
+  - Robust handling of Unicode characters and malformed responses
+- **VOD Caching and Local Playback**
+  - Cache movies or episodes locally (1–14 days) with progress tracking
+  - Automatically stream from cached content for downloads and VOD/series endpoints when available
+- **User Experience**
+  - Enhanced VOD search, including series episodes (queries like "the office s02e04")
+  - Discord bot with prettier embed-based responses, dropdown selection, and pagination
+  - Temporary streaming links for content sharing
+  - Session management with configurable timeouts
+- **Administration**
+  - Status API for monitoring active streams and users
+  - Stream timeout enforcement and user management
+  - PostgreSQL persistence for settings and state
+- **Deployment**
+  - Docker-ready with comprehensive environment variables
+  - Reverse proxy compatibility with HTTPS support
 
+### Upcoming Features
+- **Improve priorization between live streaming and download requests**
+  - Implement smarter queuing mechanisms for better resource allocation
+  - Prioritize live streaming requests over downloads for improved user experience
+  - Allow urgent download requests to bypass queues
+- **Enhanced /link command**
+  - Improved link command being able to link a user that is not me.
+- **User Statistics**
+  - Detailed user activity reports
+  - Streaming quality metrics and analytics
+- **Frontend for download link generation**
+  - User-friendly interface for creating and managing download links
 
-## Description
+## How It Works
 
-Iptv-Proxy is a project to proxyfie an m3u file
-and to proxyfie an Xtream iptv service (client API).
+### Stream Multiplexing Technology
 
-### M3U and M3U8
+StreamShare's cool feature is its ability to efficiently multiplex streams. When multiple users request the same content:
 
-M3U service convert an iptv m3u file into a web proxy server.
+1. The first user request establishes a single connection to the IPTV provider
+2. StreamShare buffers the incoming stream data
+3. All subsequent user requests for the same content receive data from this buffer
+4. The provider sees only one connection, while multiple users can watch simultaneously
+5. When all users disconnect, the upstream connection is gracefully closed
 
-It's transform all the original tracks to an new url pointing on the proxy.
+This technology significantly reduces load on the IPTV provider, prevents account limiting/banning for multiple connections, and improves stream start times for subsequent viewers.
 
+### M3U/M3U8 Proxy
 
-### Xtream code client api
+StreamShare transforms original IPTV playlist URLs into secure endpoints on your server:
 
-proxy on Xtream code (client API)
-
-support live, vod, series and full epg :rocket:
-
-### M3u Example
-
-Original iptv m3u file
-
+**Original M3U Example:**
 ```m3u
 #EXTM3U
 #EXTINF:-1 tvg-ID="examplechanel1.com" tvg-name="chanel1" tvg-logo="http://ch.xyz/logo1.png" group-title="USA HD",CHANEL1-HD
 http://iptvexample.net:1234/12/test/1
-#EXTINF:-1 tvg-ID="examplechanel2.com" tvg-name="chanel2" tvg-logo="http://ch.xyz/logo2.png" group-title="USA HD",CHANEL2-HD
-http://iptvexample.net:1234/13/test/2
-#EXTINF:-1 tvg-ID="examplechanel3.com" tvg-name="chanel3" tvg-logo="http://ch.xyz/logo3.png" group-title="USA HD",CHANEL3-HD
-http://iptvexample.net:1234/14/test/3
-#EXTINF:-1 tvg-ID="examplechanel4.com" tvg-name="chanel4" tvg-logo="http://ch.xyz/logo4.png" group-title="USA HD",CHANEL4-HD
-http://iptvexample.net:1234/15/test/4
 ```
 
-What M3U proxy IPTV do
- - convert chanels url to new endpoints
- - convert original m3u file with new routes pointing to the proxy
-
-Start proxy server example
-
-```Bash
-iptv-proxy --m3u-url http://example.com/get.php?username=user&password=pass&type=m3u_plus&output=m3u8 \
-             --port 8080 \
-             --hostname proxyexample.com \
-             --user test \
-             --password passwordtest
-```
-
-
- That's give you an m3u file on a specific endpoint `iptv.m3u` in our example
- 
- `http://proxyserver.com:8080/iptv.m3u?username=test&password=passwordtest`
-
-All the new routes pointing on your proxy server
+**Proxied Output:**
 ```m3u
 #EXTM3U
 #EXTINF:-1 tvg-ID="examplechanel1.com" tvg-name="chanel1" tvg-logo="http://ch.xyz/logo1.png" group-title="USA HD",CHANEL1-HD
-http://proxyserver.com:8080/12/test/1?username=test&password=passwordtest
-#EXTINF:-1 tvg-ID="examplechanel2.com" tvg-name="chanel2" tvg-logo="http://ch.xyz/logo2.png" group-title="USA HD",CHANEL2-HD
-http://proxyserver.com:8080/13/test/2?username=test&password=passwordtest
-#EXTINF:-1 tvg-ID="examplechanel3.com" tvg-name="chanel3" tvg-logo="http://ch.xyz/logo3.png" group-title="USA HD",CHANEL3-HD
-http://proxyserver.com:8080/14/test/3?username=test&password=passwordtest
-#EXTINF:-1 tvg-ID="examplechanel4.com" tvg-name="chanel4" tvg-logo="http://ch.xyz/logo4.png" group-title="USA HD",CHANEL4-HD
-http://proxyserver.com:8080/15/test/4?username=test&password=passwordtest
+http://yourstreamshare.com:8080/12/test/1?username=test&password=passwordtest
 ```
 
-### M3u8 Example
+**Quick Start Example:**
+```bash
+streamshare --m3u-url http://provider.com/get.php?username=user&password=pass&type=m3u_plus&output=m3u8 \
+       --port 8080 \
+       --hostname streamshare.example.com \
+       --user test \
+       --password passwordtest
+```
+Access your playlist at:  
+`http://streamshare.example.com:8080/iptv.m3u?username=test&password=passwordtest`
 
-The m3u8 feature is like m3u.
-The playlist should be in the m3u format and should contain all m3u8 tracks.
+### Xtream Codes API Compatibility
 
-Sample of the original m3u file containing m3u8 track:
-```Shell
-#EXTM3U
-#EXTINF:-1 tvg-ID="examplechanel1.com" tvg-name="chanel1" tvg-logo="http://ch.xyz/logo1.png" group-title="USA HD",CHANEL1-HD
-http://iptvexample.net:1234/12/test/1.m3u8
-#EXTINF:-1 tvg-ID="examplechanel2.com" tvg-name="chanel2" tvg-logo="http://ch.xyz/logo2.png" group-title="USA HD",CHANEL2-HD
-http://iptvexample.net:1234/13/test/2.m3u8
+StreamShare fully supports the Xtream Codes API with enhanced error handling and response sanitization:
+
+```bash
+streamshare --m3u-url http://provider.com:1234/get.php?username=user&password=pass&type=m3u_plus&output=m3u8 \
+       --port 8080 \
+       --hostname streamshare.example.com \
+       --xtream-user provider_username \
+       --xtream-password provider_password \
+       --xtream-base-url http://provider.com:1234 \
+       --user your_username \
+       --password your_password
 ```
 
-### Xtream code client API example
-
-```Bash
-% iptv-proxy --m3u-url http://example.com:1234/get.php?username=user&password=pass&type=m3u_plus&output=m3u8 \
-             --port 8080 \
-             --hostname proxyexample.com \
-             ## put xtream flags if you want to add xtream proxy
-             --xtream-user xtream_user \
-             --xtream-password xtream_password \
-             --xtream-base-url http://example.com:1234 \
-             --user test \
-             --password passwordtest
-             
+**Access with Your Credentials:**
+```
+user: your_username
+password: your_password
+base-url: http://streamshare.example.com:8080
 ```
 
-What Xtream proxy do
+---
 
- - convert xtream `xtream-user ` and `xtream-password` into new `user` and `password`
- - convert `xtream-base-url` with `hostname` and `port`
- 
-Original xtream credentials
- 
- ```
- user: xtream_user
- password: xtream_password
- base-url: http://example.com:1234
- ```
- 
-New xtream credentials
+## Discord Bot Integration
 
- ```
- user: test
- password: passwordtest
- base-url: http://proxyexample.com:8080
- ```
- 
- All xtream live, streams, vod, series... are proxyfied! 
- 
- 
- You can get the m3u file with the original Xtream api request:
- ```
- http://proxyexample.com:8080/get.php?username=test&password=passwordtest&type=m3u_plus&output=ts
- ```
+StreamShare includes a powerful Discord bot for content discovery and streaming. When enabled with the `DISCORD_BOT_TOKEN` environment variable, users can:
 
+### Commands
 
-## Installation
+| Command | Description |
+|---------|-------------|
+| `/link <ldap_username>` | Link your Discord account with your LDAP username |
+| `/vod <query>` | Search movies and series; supports queries like `show s02e04` |
+| `/cache <title> <days>` | Cache a movie or episode on the server for 1–14 days |
+| `/cached` | List cached items and expiration times |
+| `/status` | Show server status (admin only) |
+| `/disconnect <ldap_username>` | Disconnect a user from the stream |
+| `/timeout <ldap_username> <minutes>` | Temporarily block a user for N minutes |
 
-Download lasted [release](https://github.com/pierre-emmanuelJ/iptv-proxy/releases)
+Tips:
+- Link your account first with `/link <ldap_user>`.
+- Use specific queries to find episodes, e.g. `game of thrones s02e04` or `S1E1`.
 
-Or
+---
 
-`% go install` in root repository
+## API Documentation (Internal)
 
-## With Docker
+StreamShare exposes an internal API (used by the Discord bot and admin tools) under `/api/internal`.
 
-### Prerequisite
+### Endpoints
 
- - Add an m3u URL in `docker-compose.yml` or add local file in `iptv` folder
- - `HOSTNAME` and `PORT` to expose
- - Expose same container port as the `PORT` ENV variable 
+| Endpoint | Method | Description | Authentication |
+|----------|--------|-------------|----------------|
+| `/api/internal/status` | GET | Get server status summary | X-API-Key |
+| `/api/internal/streams` | GET | List all active streams | X-API-Key |
+| `/api/internal/users` | GET | List all connected users | X-API-Key |
+| `/api/internal/users/:username` | GET | Get details for a user | X-API-Key |
+| `/api/internal/users/disconnect/:username` | POST | Forcibly disconnect a user | X-API-Key |
+| `/api/internal/users/timeout/:username` | POST | Apply a timeout for a user | X-API-Key |
+| `/api/internal/discord/link` | POST | Link a Discord account to an LDAP user | X-API-Key |
+| `/api/internal/discord/:discordid/ldap` | GET | Resolve LDAP username for a Discord ID | X-API-Key |
+| `/api/internal/vod/search` | POST | Enhanced VOD search (movies + series episodes) | X-API-Key |
+| `/api/internal/vod/download` | POST | Create a temporary download link for a VOD item | X-API-Key |
+| `/api/internal/vod/status/:requestid` | GET | Check VOD request status | X-API-Key |
+| `/api/internal/cache/start` | POST | Start caching a movie/episode for N days (1–14) | X-API-Key |
+| `/api/internal/cache/by-stream/:streamid` | GET | Get cache entry by stream ID | X-API-Key |
+| `/api/internal/cache/progress/:streamid` | GET | Get cache download progress | X-API-Key |
+| `/api/internal/cache/list` | GET | List active cache entries | X-API-Key |
 
-```Yaml
- ports:
-       # have to be the same as ENV variable PORT
-      - 8080:8080
- environment:
-      # if you are using m3u remote file
-      # M3U_URL: http://example.com:1234/get.php?username=user&password=pass&type=m3u_plus&output=m3u8
-      M3U_URL: /root/iptv/iptv.m3u
-      # Port to expose the IPTVs endpoints
-      PORT: 8080
-      # Hostname or IP to expose the IPTVs endpoints (for machine not for docker)
-      HOSTNAME: localhost
-      GIN_MODE: release
-      ## Xtream-code proxy configuration
-      ## (put these env variables if you want to add xtream proxy)
-      XTREAM_USER: xtream_user
-      XTREAM_PASSWORD: xtream_password
-      XTREAM_BASE_URL: "http://example.com:1234"
-      USER: test
-      PASSWORD: testpassword
+### Authentication
+
+API requests require an API key provided in the `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: your_api_key" https://streamshare.example.com/api/internal/status
 ```
 
-### Start
+The API key is automatically generated on first run and stored in the database.
 
+To override, set `INTERNAL_API_KEY` in the environment so the bot and integrations can authenticate reliably.
+
+---
+
+## Session Management
+
+StreamShare includes sophisticated session management with configurable timeouts:
+
+- **User Sessions** - Track user logins and activity
+- **Stream Sessions** - Monitor and manage active streams
+- **Temporary Links** - Create expiring download URLs
+
+Configure with environment variables:
 ```
-% docker-compose up -d
-```
-
-## TLS - https with traefik
-
-Put files and folders of `./traekik` folder in root repo:
-```Shell
-$ cp -r ./traekik/* .
-```
-
-```Shell
-$ mkdir config \
-        && mkdir -p Traefik/etc/traefik \
-        && mkdir -p Traefik/log
-```
-
-
-`docker-compose` sample with traefik:
-```Yaml
-version: "3"
-services:
-  iptv-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    volumes:
-      # If your are using local m3u file instead of m3u remote file
-      # put your m3u file in this folder
-      - ./iptv:/root/iptv
-    container_name: "iptv-proxy"
-    restart: on-failure
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.iptv-proxy.rule=Host(`iptv.proxyexample.xyz`)"
-      - "traefik.http.routers.iptv-proxy.entrypoints=websecure"
-      - "traefik.http.routers.iptv-proxy.tls.certresolver=mydnschallenge"
-      - "traefik.http.services.iptv-proxy.loadbalancer.server.port=8080"
-    environment:
-      # if you are using m3u remote file
-      # M3U_URL: https://example.com/iptvfile.m3u
-      M3U_URL: /root/iptv/iptv.m3u
-      # Iptv-Proxy listening port
-      PORT: 8080
-      # Port to expose for Xtream or m3u file tracks endpoint
-      ADVERTISED_PORT: 443
-      # Hostname or IP to expose the IPTVs endpoints (for machine not for docker)
-      HOSTNAME: iptv.proxyexample.xyz
-      GIN_MODE: release
-      # Inportant to activate https protocol on proxy links
-      HTTPS: 1
-      ## Xtream-code proxy configuration
-      XTREAM_USER: xtream_user
-      XTREAM_PASSWORD: xtream_password
-      XTREAM_BASE_URL: "http://example.tv:1234"
-      #will be used for m3u and xtream auth proxy
-      USER: test
-      PASSWORD: testpassword
-
-  traefik:
-    restart: always
-    image: traefik:v2.4
-    read_only: true
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./Traefik/traefik.yaml:/traefik.yaml:ro
-      - ./Traefik/etc/traefik:/etc/traefik/
-      - ./Traefik/log:/var/log/traefik/
+SESSION_TIMEOUT_MINUTES=120  # User session timeout (default: 60)
+STREAM_TIMEOUT_MINUTES=240   # Stream session timeout (default: 120)
+TEMP_LINK_HOURS=24           # Temporary link validity (default: 24)
 ```
 
-Replace `iptv.proxyexample.xyz` in `docker-compose.yml` with your desired domain.
+### Direct Stream URLs
 
-```Shell
-$ docker-compose up -d
+StreamShare supports direct stream URLs with proxy authentication in the path:
+
+```
+https://streamshare.example.com/username/password/12345
+https://streamshare.example.com/live/username/password/12345
+https://streamshare.example.com/movie/username/password/12345
+https://streamshare.example.com/series/username/password/12345
 ```
 
-## TODO
+These URLs are useful for direct integration with media players and other systems.
 
-there is basic auth just for testing.
-change with a real auth with database and user management
-and auth with token...
+When the target movie or series episode is cached and ready, these endpoints serve the local file (with HTTP range support) instead of proxying upstream.
 
-**ENJOY!**
+### Temporary Links
 
-## Powered by
+Generate temporary download links that expire after a configurable period:
 
-- [cobra](https://github.com/spf13/cobra)
-- [go.xtream-codes](https://github.com/tellytv/go.xtream-codes)
-- [gin](https://github.com/gin-gonic/gin)
+```
+https://streamshare.example.com/download/a1b2c3d4e5f6
+```
 
-Grab me a beer 🍻
+Behavior:
+- If the requested VOD is cached and ready, the file is served directly from local storage.
+- Otherwise, the request is proxied from the provider.
 
-[![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif)](https://www.paypal.com/donate?hosted_button_id=WQAAMQWJPKHUN)
+Temporary links are perfect for sharing VOD content with users who don't have StreamShare accounts. Control lifetime with `TEMP_LINK_HOURS`.
+
+### VOD Caching
+
+Cache movies or episodes to disk for faster start times and to reduce upstream usage:
+
+- Start a cache from Discord with `/cache <title> <days>` (1–14 days).
+- Track progress and list items with `/cached`.
+- Cached items automatically serve for both downloads and VOD/series streaming endpoints when available.
+
+Configuration:
+- `CACHE_FOLDER` — Absolute path where cached files are stored.
+- `INTERNAL_API_KEY` — API key used by the internal API (Discord bot and tools).
+
+---
+
+## Database Support
+
+PostgreSQL is required for state persistence. Configure with:
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+
+---
+
+## Powered By
+
+- [go-ldap/ldap](https://github.com/go-ldap/ldap) - LDAP authentication
+- [spf13/cobra](https://github.com/spf13/cobra) - Command-line interface
+- [bwmarrin/discordgo](https://github.com/bwmarrin/discordgo) - Discord bot integration
+- [tellytv/go.xtream-codes](https://github.com/tellytv/go.xtream-codes) - Xtream Codes client
+- [gin-gonic/gin](https://github.com/gin-gonic/gin) - Web framework
+
+---
+
+## Support
+
+If you find StreamShare useful, consider supporting its development:
+
+[![paypal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.me/lucasdup135)
 
