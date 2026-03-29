@@ -142,7 +142,22 @@ func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
 
     // Copy response headers and status code
     mergeHttpHeader(ctx.Writer.Header(), resp.Header)
-    ctx.Status(resp.StatusCode)
+    status := resp.StatusCode
+    // If the client did not send a Range header but upstream returned 206, the player
+    // will get confused (it expected 200) and immediately drop the connection.
+    // Normalize to 200 and convert Content-Range into Content-Length.
+    if status == http.StatusPartialContent && ctx.Request.Header.Get("Range") == "" {
+        status = http.StatusOK
+        if cr := ctx.Writer.Header().Get("Content-Range"); cr != "" {
+            if idx := strings.LastIndex(cr, "/"); idx >= 0 {
+                if total := strings.TrimSpace(cr[idx+1:]); total != "*" && total != "" {
+                    ctx.Writer.Header().Set("Content-Length", total)
+                }
+            }
+        }
+        ctx.Writer.Header().Del("Content-Range")
+    }
+    ctx.Status(status)
 
     // Stream the response body to the client with flushes
     w := ctx.Writer
