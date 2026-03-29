@@ -359,7 +359,7 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandler(ctx *gin.Context) {
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/movie/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
     if err != nil { utils.ErrorLog("Failed to parse upstream URL: %v", err); ctx.AbortWithStatus(500); return }
-    c.multiplexedStream(ctx, rpURL)
+    c.stream(ctx, rpURL)
 }
 
 func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
@@ -428,7 +428,7 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandler(ctx *gin.Context) {
     }
     rpURL, err := url.Parse(fmt.Sprintf("%s/series/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
     if err != nil { utils.ErrorLog("Failed to parse upstream URL: %v", err); ctx.AbortWithStatus(500); return }
-    c.multiplexedStream(ctx, rpURL)
+    c.stream(ctx, rpURL)
 }
 
 // HLS helpers and handlers
