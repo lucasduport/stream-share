@@ -646,55 +646,116 @@ var vodCacheClient = &http.Client{
 	},
 }
 
-// fetchToFile downloads from upstream URL to a local file; marks DB entry ready/failed
+// fetchToFile downloads from upstream URL to a local file; marks DB entry ready/failed.
+// On connection drops (unexpected EOF) it retries automatically using a Range header to
+// resume from the current offset, up to maxCacheRetries times.
 func (c *Config) fetchToFile(upstream, dest, streamID string, expires time.Time) {
 	utils.InfoLog("Caching start: %s -> %s", utils.MaskURL(upstream), dest)
 	tmp := dest + ".part"
-	// Create file
+
 	f, err := os.Create(tmp)
 	if err != nil { utils.ErrorLog("Cache: create file error: %v", err); c.cacheFail(streamID); return }
 	defer f.Close()
-	// Request with UA and support for resume in future
-	req, err := http.NewRequestWithContext(context.Background(), "GET", upstream, nil)
-	if err != nil { utils.ErrorLog("Cache: failed to build request: %v", err); c.cacheFail(streamID); return }
-	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-	resp, err := vodCacheClient.Do(req)
-	if err != nil { utils.ErrorLog("Cache: upstream error: %v", err); c.cacheFail(streamID); return }
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		utils.ErrorLog("Cache: upstream status %d", resp.StatusCode)
-		c.cacheFail(streamID); return
-	}
-	// Progress: known total?
-	var total int64
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		if v, err := strconv.ParseInt(cl, 10, 64); err == nil { total = v }
-	}
-	var downloaded int64
-	buf := make([]byte, 256*1024)
+
+	const maxCacheRetries = 5
+	var downloaded, total int64
 	lastUpdate := time.Now()
-	for {
-		nr, er := resp.Body.Read(buf)
-		if nr > 0 {
-			if _, ew := f.Write(buf[:nr]); ew != nil { utils.ErrorLog("Cache: write error: %v", ew); c.cacheFail(streamID); return }
-			downloaded += int64(nr)
-			// Periodically persist progress (throttle)
-			if c.db != nil && time.Since(lastUpdate) > 1*time.Second {
-				_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: streamID, FilePath: dest, DownloadedBytes: downloaded, TotalBytes: total, Status: "downloading", ExpiresAt: expires, LastAccess: time.Now()})
-				lastUpdate = time.Now()
+	completed := false
+
+	for attempt := 0; attempt <= maxCacheRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt) * 3 * time.Second
+			utils.WarnLog("Cache: connection interrupted at %s/%s, retrying in %s (attempt %d/%d)",
+				utils.HumanBytes(downloaded), utils.HumanBytes(total), backoff, attempt, maxCacheRetries)
+			time.Sleep(backoff)
+			// Seek file to current offset so we append correctly on resume
+			if _, seekErr := f.Seek(downloaded, io.SeekStart); seekErr != nil {
+				utils.ErrorLog("Cache: seek error: %v", seekErr); c.cacheFail(streamID); return
 			}
 		}
-		if er != nil {
-			if er == io.EOF { break }
-			utils.ErrorLog("Cache: read error: %v", er); c.cacheFail(streamID); return
+
+		req, reqErr := http.NewRequestWithContext(context.Background(), "GET", upstream, nil)
+		if reqErr != nil { utils.ErrorLog("Cache: failed to build request: %v", reqErr); c.cacheFail(streamID); return }
+		req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
+		if downloaded > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", downloaded))
 		}
+
+		resp, doErr := vodCacheClient.Do(req)
+		if doErr != nil {
+			utils.WarnLog("Cache: upstream error (attempt %d): %v", attempt, doErr)
+			continue
+		}
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			// Provider returned 200 despite our Range request — must restart from beginning.
+			if downloaded > 0 {
+				utils.WarnLog("Cache: provider ignored Range header, restarting download for %s", streamID)
+				downloaded = 0
+				if tErr := f.Truncate(0); tErr != nil { resp.Body.Close(); utils.ErrorLog("Cache: truncate error: %v", tErr); c.cacheFail(streamID); return }
+				if _, sErr := f.Seek(0, io.SeekStart); sErr != nil { resp.Body.Close(); utils.ErrorLog("Cache: seek error: %v", sErr); c.cacheFail(streamID); return }
+			}
+			if total == 0 {
+				if cl := resp.Header.Get("Content-Length"); cl != "" {
+					if v, pErr := strconv.ParseInt(cl, 10, 64); pErr == nil { total = v }
+				}
+			}
+		case http.StatusPartialContent:
+			// Resumed successfully — extract total from Content-Range.
+			if total == 0 {
+				if cr := resp.Header.Get("Content-Range"); cr != "" {
+					if idx := strings.LastIndex(cr, "/"); idx >= 0 {
+						if t := strings.TrimSpace(cr[idx+1:]); t != "*" {
+							if v, pErr := strconv.ParseInt(t, 10, 64); pErr == nil { total = v }
+						}
+					}
+				}
+			}
+		default:
+			resp.Body.Close()
+			utils.WarnLog("Cache: upstream status %d (attempt %d)", resp.StatusCode, attempt)
+			continue
+		}
+
+		buf := make([]byte, 256*1024)
+		var readErr error
+		for {
+			nr, er := resp.Body.Read(buf)
+			if nr > 0 {
+				if _, ew := f.Write(buf[:nr]); ew != nil {
+					resp.Body.Close()
+					utils.ErrorLog("Cache: write error: %v", ew); c.cacheFail(streamID); return
+				}
+				downloaded += int64(nr)
+				if c.db != nil && time.Since(lastUpdate) > 1*time.Second {
+					_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: streamID, FilePath: dest, DownloadedBytes: downloaded, TotalBytes: total, Status: "downloading", ExpiresAt: expires, LastAccess: time.Now()})
+					lastUpdate = time.Now()
+				}
+			}
+			if er != nil { readErr = er; break }
+		}
+		resp.Body.Close()
+
+		if readErr == io.EOF || (total > 0 && downloaded >= total) {
+			completed = true
+			break
+		}
+		// io.ErrUnexpectedEOF or other transient errors: log and retry
+		utils.WarnLog("Cache: read interrupted at %s/%s: %v", utils.HumanBytes(downloaded), utils.HumanBytes(total), readErr)
 	}
+
+	if !completed {
+		utils.ErrorLog("Cache: download failed after %d retries: %s", maxCacheRetries, utils.MaskURL(upstream))
+		c.cacheFail(streamID)
+		return
+	}
+
 	n := downloaded
 	if err := f.Sync(); err != nil { utils.WarnLog("Cache: fsync warning: %v", err) }
 	if err := os.Rename(tmp, dest); err != nil { utils.ErrorLog("Cache: rename error: %v", err); c.cacheFail(streamID); return }
 	utils.InfoLog("Caching done: %s (%s)", dest, utils.HumanBytes(n))
 	if c.db != nil {
-		// Try to resolve and store the M3U title on completion (best-effort)
 		basePath := "movie"
 		if strings.Contains(upstream, "/series/") { basePath = "series" }
 		var finalTitle string
