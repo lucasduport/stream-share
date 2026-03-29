@@ -40,8 +40,10 @@ func prepareVODHeaders(ctx *gin.Context) http.Header {
     if v := ctx.Request.Header.Get("Accept"); v != "" { clean.Set("Accept", v) } else { clean.Set("Accept", "*/*") }
     // Accept-Language
     if v := ctx.Request.Header.Get("Accept-Language"); v != "" { clean.Set("Accept-Language", v) } else { clean.Set("Accept-Language", utils.GetLanguageHeader()) }
-    // Range
-    if v := ctx.Request.Header.Get("Range"); v != "" { clean.Set("Range", v) } else { clean.Set("Range", "bytes=0-") }
+    // Range — only forward if the client actually sent it; do not inject bytes=0- because
+    // that forces a 206 response which may lack a Content-Range total, leaving the player
+    // unable to determine file size and triggering avformat errors.
+    if v := ctx.Request.Header.Get("Range"); v != "" { clean.Set("Range", v) }
     // Connection
     clean.Set("Connection", "keep-alive")
     // UA and encoding
@@ -52,6 +54,11 @@ func prepareVODHeaders(ctx *gin.Context) http.Header {
 
 func isVODPath(p string) bool {
     lp := strings.ToLower(p)
+    // Live, timeshift, and HLS are never VOD even if they end in .ts
+    if strings.Contains(lp, "/live/") || strings.Contains(lp, "/timeshift/") ||
+        strings.Contains(lp, "/hls/") || strings.Contains(lp, "/hlsr/") || strings.Contains(lp, "/play/") {
+        return false
+    }
     if strings.Contains(lp, "/movie/") || strings.Contains(lp, "/series/") {
         return true
     }
