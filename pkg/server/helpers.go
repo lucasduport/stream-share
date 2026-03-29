@@ -247,5 +247,3 @@ func parseRange(h string, size int64) (int64, int64, bool) {
     if end >= size { end = size - 1 }
     return start, end, true
 }
-
-func max64(a, b int64) int64 { if a > b { return a } ; return b }
