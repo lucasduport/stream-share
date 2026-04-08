@@ -114,7 +114,7 @@ func (c *Client) Action(cfg *config.ProxyConfig, action string, q url.Values) (r
         if err != nil { lastErr = err; continue }
         defer resp.Body.Close()
         if resp.StatusCode == http.StatusOK {
-            b, err = io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+            b, err = io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024))
             if err != nil { lastErr = err; continue }
             break
         } else {
