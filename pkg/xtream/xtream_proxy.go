@@ -114,7 +114,7 @@ func (c *Client) Action(cfg *config.ProxyConfig, action string, q url.Values) (r
         if err != nil { lastErr = err; continue }
         defer resp.Body.Close()
         if resp.StatusCode == http.StatusOK {
-            b, err = io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+            b, err = io.ReadAll(io.LimitReader(resp.Body, 100*1024*1024))
             if err != nil { lastErr = err; continue }
             break
         } else {
@@ -164,7 +164,7 @@ func (c *Client) GetXMLTV() ([]byte, error) {
     if err != nil { return nil, utils.PrintErrorAndReturn(err) }
     defer resp.Body.Close()
     if resp.StatusCode != http.StatusOK { return nil, utils.PrintErrorAndReturn(fmt.Errorf("unexpected status code: %d", resp.StatusCode)) }
-    limitedReader := &io.LimitedReader{R: resp.Body, N: 50 * 1024 * 1024}
+    limitedReader := &io.LimitedReader{R: resp.Body, N: 100 * 1024 * 1024}
     xmlData, err := io.ReadAll(limitedReader)
     if err != nil { return nil, utils.PrintErrorAndReturn(fmt.Errorf("failed to read XMLTV data: %w", err)) }
     return xmlData, nil
