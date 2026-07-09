@@ -40,6 +40,7 @@ import (
 	"github.com/lucasduport/stream-share/pkg/discord"
 	"github.com/lucasduport/stream-share/pkg/session"
 	"github.com/lucasduport/stream-share/pkg/utils"
+	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
 	uuid "github.com/satori/go.uuid"
 
 	"github.com/gin-gonic/gin"
@@ -120,6 +121,9 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 	serverConfig.sessionManager = session.NewSessionManager(db)
 	serverConfig.sessionManager.SetNameResolver(serverConfig.resolveStreamName)
 	utils.InfoLog("Session manager initialized with database connection")
+
+	// Seed in-memory name indices from DB so names are available before the first API call.
+	serverConfig.warmChannelIndexFromDB()
 
 	// After session manager init
 	if serverConfig.sessionManager == nil {
@@ -285,6 +289,11 @@ func (c *Config) Serve() error {
 	// Warm the channel-name index from get_live_streams so /status and logs can
 	// resolve names immediately, without waiting for a player to request the list.
 	go c.warmChannelNameIndex()
+
+	// Start background goroutine to keep apiChannelIndex fresh.
+	nameRefreshStop := make(chan struct{})
+	c.startNameIndexRefresher(nameRefreshStop)
+	defer close(nameRefreshStop)
 
 	if c.sessionManager != nil {
 		defer c.sessionManager.Stop()
@@ -709,4 +718,46 @@ func sanitiseFilename(name string) string {
 		}
 		return r
 	}, name)
+}
+
+// startNameIndexRefresher runs a background goroutine that periodically re-fetches
+// get_live_streams from the upstream Xtream API to keep apiChannelIndex fresh.
+func (c *Config) startNameIndexRefresher(stopCh <-chan struct{}) {
+	interval := time.Duration(c.M3UCacheExpiration) * time.Hour
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				c.refreshAPIChannelIndex()
+			}
+		}
+	}()
+}
+
+// refreshAPIChannelIndex re-fetches get_live_streams from the upstream Xtream API
+// and updates the in-memory apiChannelIndex (and persists to DB).
+func (c *Config) refreshAPIChannelIndex() {
+	if c.XtreamBaseURL == "" {
+		return
+	}
+	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, "")
+	if err != nil {
+		utils.WarnLog("stream_names refresh: failed to create Xtream client: %v", err)
+		return
+	}
+	resp, _, _, err := client.Action(c.ProxyConfig, "get_live_streams", nil)
+	if err != nil {
+		utils.WarnLog("stream_names refresh: get_live_streams failed: %v", err)
+		return
+	}
+	if n := c.harvestChannelNames(xtreamapi.ProcessResponse(resp)); n > 0 {
+		utils.DebugLog("stream_names: refreshed %d live channel names from upstream", n)
+	}
 }

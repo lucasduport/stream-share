@@ -27,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
 var (
@@ -41,16 +43,41 @@ var (
 	// proxified M3U playlist was never generated (pure Xtream API mode).
 	apiChannelIndexMu sync.RWMutex
 	apiChannelIndex   map[string]string
+
+	// epgIndex maps normalized stream IDs to EPG channel IDs (tvg-id / epg_channel_id).
+	epgIndexMu sync.RWMutex
+	epgIndex   map[string]string // normalized stream_id → tvg-id
 )
 
-// updateAPIChannelIndex replaces the API-sourced name index with id→name pairs.
-func updateAPIChannelIndex(names map[string]string) {
+// updateAPIChannelIndex replaces the API-sourced name index with id→name pairs and optional EPG IDs.
+func (c *Config) updateAPIChannelIndex(names map[string]string, epgIDs map[string]string) {
 	if len(names) == 0 {
 		return
 	}
 	apiChannelIndexMu.Lock()
 	apiChannelIndex = names
 	apiChannelIndexMu.Unlock()
+
+	if len(epgIDs) > 0 {
+		epgIndexMu.Lock()
+		epgIndex = epgIDs // API is authoritative for EPG IDs
+		epgIndexMu.Unlock()
+	}
+
+	if err := c.db.UpsertStreamNames(names, epgIDs, "api"); err != nil {
+		utils.WarnLog("stream_names: failed to persist API channel index: %v", err)
+	}
+}
+
+// lookupEPGChannelID returns the EPG channel ID (tvg-id) for a normalized stream ID.
+func lookupEPGChannelID(normalizedID string) (string, bool) {
+	epgIndexMu.RLock()
+	defer epgIndexMu.RUnlock()
+	if epgIndex == nil {
+		return "", false
+	}
+	id, ok := epgIndex[normalizedID]
+	return id, ok && id != ""
 }
 
 // lookupAPIChannelName returns the channel name for a normalized stream ID.
@@ -107,7 +134,9 @@ func (c *Config) ensureChannelIndex() {
 
 	sc := bufio.NewScanner(f)
 	lastTitle := ""
+	lastEPGID := ""
 	newIndex := make(map[string]string, 4096)
+	newEPGIndex := make(map[string]string, 4096)
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -120,6 +149,8 @@ func (c *Config) ensureChannelIndex() {
 			} else {
 				lastTitle = ""
 			}
+			// Extract tvg-id attribute
+			lastEPGID = extractM3UAttr(line, "tvg-id")
 			continue
 		}
 		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
@@ -130,15 +161,72 @@ func (c *Config) ensureChannelIndex() {
 				if lastTitle != "" {
 					newIndex[id] = lastTitle
 				}
+				if lastEPGID != "" {
+					newEPGIndex[id] = lastEPGID
+				}
 			}
 			lastTitle = ""
+			lastEPGID = ""
 		}
 	}
 	// best-effort index
 
+	epgIndexMu.Lock()
+	epgIndex = newEPGIndex
+	epgIndexMu.Unlock()
+
+	// Write to DB (best-effort, non-fatal)
+	if err := c.db.UpsertStreamNames(newIndex, newEPGIndex, "m3u"); err != nil {
+		utils.WarnLog("stream_names: failed to persist M3U channel index: %v", err)
+	}
+
 	channelIndex = newIndex
 	channelIndexPath = m3uPath
 	channelIndexMTime = info.ModTime()
+}
+
+// warmChannelIndexFromDB seeds the in-memory indices from the database on startup.
+func (c *Config) warmChannelIndexFromDB() {
+	bySource, dbEPGIndex, err := c.db.LoadStreamNames()
+	if err != nil {
+		utils.WarnLog("stream_names: failed to load from DB: %v", err)
+		return
+	}
+	if m3uNames := bySource["m3u"]; len(m3uNames) > 0 {
+		channelIndexMu.Lock()
+		if channelIndex == nil {
+			channelIndex = m3uNames
+		}
+		channelIndexMu.Unlock()
+	}
+	if apiNames := bySource["api"]; len(apiNames) > 0 {
+		apiChannelIndexMu.Lock()
+		if apiChannelIndex == nil {
+			apiChannelIndex = apiNames
+		}
+		apiChannelIndexMu.Unlock()
+	}
+	if vodNames := bySource["vod"]; len(vodNames) > 0 {
+		vodNameMu.Lock()
+		for id, name := range vodNames {
+			if _, exists := vodNameIndex[id]; !exists {
+				vodNameIndex[id] = name
+			}
+		}
+		vodNameMu.Unlock()
+	}
+	if len(dbEPGIndex) > 0 {
+		epgIndexMu.Lock()
+		if epgIndex == nil {
+			epgIndex = dbEPGIndex
+		}
+		epgIndexMu.Unlock()
+	}
+	total := len(bySource["m3u"]) + len(bySource["api"]) + len(bySource["vod"])
+	if total > 0 {
+		utils.InfoLog("stream_names: loaded %d names from DB (m3u=%d, api=%d, vod=%d)",
+			total, len(bySource["m3u"]), len(bySource["api"]), len(bySource["vod"]))
+	}
 }
 
 // getChannelNameByID returns the channel name for a given stream ID if known.
@@ -170,4 +258,19 @@ func (c *Config) streamLabel(streamID string) string {
 		return fmt.Sprintf("%s (Stream %s)", strings.TrimSpace(name), id)
 	}
 	return fmt.Sprintf("Stream %s", id)
+}
+
+// extractM3UAttr extracts the value of a key="value" attribute from an #EXTINF line.
+func extractM3UAttr(line, key string) string {
+	prefix := key + `="`
+	start := strings.Index(line, prefix)
+	if start < 0 {
+		return ""
+	}
+	start += len(prefix)
+	end := strings.Index(line[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return line[start : start+end]
 }

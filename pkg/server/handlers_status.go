@@ -42,13 +42,14 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 
 	streams := c.sessionManager.GetAllStreams()
 	type item struct {
-		StreamID    string    `json:"stream_id"`
-		StreamType  string    `json:"stream_type"`
-		StreamTitle string    `json:"stream_title"`
-		ViewerCount int       `json:"viewer_count"`
-		Viewers     []string  `json:"viewers"`
-		StartedAt   time.Time `json:"started_at"`
-		Duration    string    `json:"duration"`
+		StreamID     string    `json:"stream_id"`
+		StreamType   string    `json:"stream_type"`
+		StreamTitle  string    `json:"stream_title"`
+		EPGChannelID string    `json:"epg_channel_id,omitempty"`
+		ViewerCount  int       `json:"viewer_count"`
+		Viewers      []string  `json:"viewers"`
+		StartedAt    time.Time `json:"started_at"`
+		Duration     string    `json:"duration"`
 	}
 	summary := make([]item, 0, len(streams))
 
@@ -72,14 +73,17 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 			}
 		}
 
+		epgID, _ := lookupEPGChannelID(normalizeStreamID(s.StreamID))
+
 		summary = append(summary, item{
-			StreamID:    s.StreamID,
-			StreamType:  s.StreamType,
-			StreamTitle: title,
-			ViewerCount: len(names),
-			Viewers:     names,
-			StartedAt:   s.StartTime,
-			Duration:    dur.String(),
+			StreamID:     s.StreamID,
+			StreamType:   s.StreamType,
+			StreamTitle:  title,
+			EPGChannelID: epgID,
+			ViewerCount:  len(names),
+			Viewers:      names,
+			StartedAt:    s.StartTime,
+			Duration:     dur.String(),
 		})
 	}
 
@@ -106,8 +110,12 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 			if strings.TrimSpace(title) == "" {
 				title = it.StreamID
 			}
-			fmt.Fprintf(&b, "- %s [%s] — %d viewer(s): %s (since %s)\n",
-				title, it.StreamType, it.ViewerCount, strings.Join(it.Viewers, ", "), it.Duration,
+			epgSuffix := ""
+			if it.EPGChannelID != "" {
+				epgSuffix = fmt.Sprintf(" [%s]", it.EPGChannelID)
+			}
+			fmt.Fprintf(&b, "- %s%s [%s] — %d viewer(s): %s (since %s)\n",
+				title, epgSuffix, it.StreamType, it.ViewerCount, strings.Join(it.Viewers, ", "), it.Duration,
 			)
 		}
 	}

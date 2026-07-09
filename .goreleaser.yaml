@@ -25,15 +25,15 @@ archives:
 
 release:
   github:
-    owner: lucasduport
+    owner: x3n0n10
     name: stream-share
   draft: false
 
 nfpms:
   -
-   vendor: lucasduport
-   homepage: https://github.com/lucasduport/stream-share
-   maintainer: lucasduport
+   vendor: x3n0n10
+   homepage: https://github.com/x3n0n10/stream-share
+   maintainer: x3n0n10
    description: IPTV Proxy with LDAP support
    license: GPL-3.0
    formats:
@@ -42,8 +42,10 @@ nfpms:
 
 dockers:
   - image_templates:
-    - "ghcr.io/lucasduport/stream-share:{{ .Tag }}-arm64"
-    - "{{ if not .Prerelease }}ghcr.io/lucasduport/stream-share:latest-arm64{{ end }}"
+    - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-arm64"
+    - "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest-arm64{{ end }}"
+    - "x3n0n10/stream-share:{{ .Tag }}-arm64"
+    - "{{ if not .Prerelease }}x3n0n10/stream-share:latest-arm64{{ end }}"
     use: buildx
     goos: linux
     goarch: arm64
@@ -59,8 +61,10 @@ dockers:
     dockerfile: .Dockerfile.goreleaser
 
   - image_templates:
-    - "ghcr.io/lucasduport/stream-share:{{ .Tag }}-amd64"
-    - "{{ if not .Prerelease }}ghcr.io/lucasduport/stream-share:latest-amd64{{ end }}"
+    - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-amd64"
+    - "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest-amd64{{ end }}"
+    - "x3n0n10/stream-share:{{ .Tag }}-amd64"
+    - "{{ if not .Prerelease }}x3n0n10/stream-share:latest-amd64{{ end }}"
     use: buildx
     goos: linux
     goarch: amd64
@@ -76,12 +80,21 @@ dockers:
     dockerfile: .Dockerfile.goreleaser
 
 docker_manifests:
-  - name_template: "ghcr.io/lucasduport/stream-share:{{ .Tag }}"
+  - name_template: "x3n0n10/stream-share:{{ .Tag }}"
     image_templates:
-      - "ghcr.io/lucasduport/stream-share:{{ .Tag }}-amd64"
-      - "ghcr.io/lucasduport/stream-share:{{ .Tag }}-arm64"
-  - name_template: "{{ if not .Prerelease }}ghcr.io/lucasduport/stream-share:latest{{ end }}"
+      - "x3n0n10/stream-share:{{ .Tag }}-amd64"
+      - "x3n0n10/stream-share:{{ .Tag }}-arm64"
+  - name_template: "{{ if not .Prerelease }}x3n0n10/stream-share:latest{{ end }}"
     image_templates:
-      - "ghcr.io/lucasduport/stream-share:latest-amd64"
-      - "ghcr.io/lucasduport/stream-share:latest-arm64"
+      - "x3n0n10/stream-share:latest-amd64"
+      - "x3n0n10/stream-share:latest-arm64"
+    skip_push: "{{ if .Prerelease }}true{{ end }}"
+  - name_template: "ghcr.io/x3n0n10/stream-share:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-amd64"
+      - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-arm64"
+  - name_template: "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest{{ end }}"
+    image_templates:
+      - "ghcr.io/x3n0n10/stream-share:latest-amd64"
+      - "ghcr.io/x3n0n10/stream-share:latest-arm64"
     skip_push: "{{ if .Prerelease }}true{{ end }}"

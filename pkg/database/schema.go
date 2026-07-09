@@ -101,6 +101,25 @@ func (m *DBManager) initSchema() error {
         return fmt.Errorf("failed to create vod_cache table: %w", err)
     }
 
+    if _, err := m.db.Exec(`
+        CREATE TABLE IF NOT EXISTS stream_names (
+            stream_id      TEXT NOT NULL,
+            source         TEXT NOT NULL,
+            name           TEXT NOT NULL,
+            epg_channel_id TEXT NOT NULL DEFAULT '',
+            updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (stream_id, source)
+        )
+    `); err != nil {
+        utils.ErrorLog("Failed to create stream_names table: %v", err)
+        return fmt.Errorf("failed to create stream_names table: %w", err)
+    }
+
+    // Migration: add epg_channel_id column to existing stream_names tables.
+    if _, err := m.db.Exec(`ALTER TABLE stream_names ADD COLUMN IF NOT EXISTS epg_channel_id TEXT NOT NULL DEFAULT ''`); err != nil {
+        return fmt.Errorf("failed to add epg_channel_id to stream_names: %w", err)
+    }
+
     utils.InfoLog("Database schema initialized successfully")
     return nil
 }

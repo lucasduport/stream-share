@@ -26,3 +26,6 @@ iptv/iptv.m3u
 .docker-compose.yml
 
 dist/
+
+# Claude Code local session data and worktrees
+.claude/

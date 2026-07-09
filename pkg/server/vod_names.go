@@ -72,6 +72,11 @@ func (c *Config) vodTitleByID(streamID string) (string, bool) {
 	vodNameMu.Lock()
 	vodNameIndex[id] = title // title may be "" = confirmed no title
 	vodNameMu.Unlock()
+	if title != "" {
+		if err := c.db.UpsertStreamName(id, "vod", title, ""); err != nil {
+			utils.WarnLog("stream_names: failed to persist VOD name for %s: %v", id, err)
+		}
+	}
 	return title, title != ""
 }
 
@@ -138,7 +143,7 @@ func (c *Config) resolveTitleAtStart(streamID, streamType string) (string, bool)
 		// get_vod_info is keyed by a movie vod_id and cannot resolve a series
 		// episode id, so series rely on the cached VOD M3U title when available.
 		if t := c.findVODTitleInCache("series", streamID); strings.TrimSpace(t) != "" {
-			cacheVODName(streamID, t)
+			c.cacheVODName(streamID, t)
 			return t, true
 		}
 	}
@@ -147,7 +152,7 @@ func (c *Config) resolveTitleAtStart(streamID, streamType string) (string, bool)
 
 // cacheVODName stores a resolved title in the VOD cache (e.g. one found via the
 // M3U cache) so locked log lookups can later resolve it without network I/O.
-func cacheVODName(streamID, title string) {
+func (c *Config) cacheVODName(streamID, title string) {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return
@@ -156,6 +161,9 @@ func cacheVODName(streamID, title string) {
 	vodNameMu.Lock()
 	vodNameIndex[id] = title
 	vodNameMu.Unlock()
+	if err := c.db.UpsertStreamName(id, "vod", title, ""); err != nil {
+		utils.WarnLog("stream_names: failed to persist VOD name for %s: %v", id, err)
+	}
 }
 
 // vodLabel formats a VOD stream for logging as "Title (Stream <id>)", resolving
