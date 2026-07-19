@@ -22,17 +22,17 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
-	"time"
-	"io"
-	"strconv"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -118,38 +118,59 @@ func (c *Config) searchVOD(ctx *gin.Context) {
 // It takes the full result list with minimal fields and returns the same list with the specified page enriched.
 func (c *Config) enrichVODPage(ctx *gin.Context) {
 	var req struct {
-		Query   string           `json:"query"`
+		Query   string            `json:"query"`
 		Results []types.VODResult `json:"results"`
-		Page    int              `json:"page"`
-		PerPage int              `json:"per_page"`
+		Page    int               `json:"page"`
+		PerPage int               `json:"per_page"`
 	}
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "Invalid request: " + err.Error()})
 		return
 	}
-	if req.PerPage <= 0 { req.PerPage = 25 }
+	if req.PerPage <= 0 {
+		req.PerPage = 25
+	}
 	total := len(req.Results)
 	if total == 0 {
 		ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{"results": req.Results}})
 		return
 	}
 	pages := (total + req.PerPage - 1) / req.PerPage
-	if pages == 0 { pages = 1 }
-	if req.Page < 0 { req.Page = 0 }
-	if req.Page >= pages { req.Page = pages - 1 }
+	if pages == 0 {
+		pages = 1
+	}
+	if req.Page < 0 {
+		req.Page = 0
+	}
+	if req.Page >= pages {
+		req.Page = pages - 1
+	}
 	start := req.Page * req.PerPage
 	end := start + req.PerPage
-	if end > total { end = total }
+	if end > total {
+		end = total
+	}
 
 	// Build an index of movie streamID -> extension from the cached VOD M3U once
 	extIndex := map[string]string{}
 	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if idx, err2 := parseVODM3UExtensions(m3uPath); err2 == nil { extIndex = idx }
+		if idx, err2 := parseVODM3UExtensions(m3uPath); err2 == nil {
+			extIndex = idx
+		}
 	}
 	// Shared HTTP client with per-request timeout
 	client := &http.Client{Timeout: 2500 * time.Millisecond, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 { return http.ErrUseLastResponse }
-		if len(via) > 0 { prev := via[len(via)-1]; for k, vv := range prev.Header { arr := make([]string, len(vv)); copy(arr, vv); req.Header[k] = arr } }
+		if len(via) >= 10 {
+			return http.ErrUseLastResponse
+		}
+		if len(via) > 0 {
+			prev := via[len(via)-1]
+			for k, vv := range prev.Header {
+				arr := make([]string, len(vv))
+				copy(arr, vv)
+				req.Header[k] = arr
+			}
+		}
 		return nil
 	}}
 
@@ -168,23 +189,45 @@ func (c *Config) enrichVODPage(ctx *gin.Context) {
 		var wg sync.WaitGroup
 		mu := sync.Mutex{}
 		workers := 8
-		if workers > count { workers = count }
+		if workers > count {
+			workers = count
+		}
 		workerFn := func() {
 			defer wg.Done()
 			for j := range jobs {
 				i := j.idx
 				streamID := req.Results[i].StreamID
-				if streamID == "" { continue }
-				if req.Results[i].SizeBytes > 0 { continue }
+				if streamID == "" {
+					continue
+				}
+				if req.Results[i].SizeBytes > 0 {
+					continue
+				}
 				// Build Xtream URL with best-effort extension
-				typ := req.Results[i].StreamType; if typ == "" { typ = "movie" }
-				basePath := "movie"; if typ == "series" { basePath = "series" }
+				typ := req.Results[i].StreamType
+				if typ == "" {
+					typ = "movie"
+				}
+				basePath := "movie"
+				if typ == "series" {
+					basePath = "series"
+				}
 				finalID := streamID
-				if ext := extIndex[streamID]; ext != "" { finalID += ext } else if path.Ext(finalID) == "" { if basePath == "series" { finalID += ".mkv" } else { finalID += ".mp4" } }
+				if ext := extIndex[streamID]; ext != "" {
+					finalID += ext
+				} else if path.Ext(finalID) == "" {
+					if basePath == "series" {
+						finalID += ".mkv"
+					} else {
+						finalID += ".mp4"
+					}
+				}
 				vodURL := fmt.Sprintf("%s/%s/%s/%s/%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, finalID)
 				// Range GET
 				reqHTTP, reqErr := http.NewRequest("GET", vodURL, nil)
-				if reqErr != nil { continue }
+				if reqErr != nil {
+					continue
+				}
 				reqHTTP.Header.Set("Range", "bytes=0-0")
 				reqHTTP.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 				reqHTTP.Header.Set("Accept-Encoding", "identity")
@@ -196,26 +239,43 @@ func (c *Config) enrichVODPage(ctx *gin.Context) {
 					if cr := resp.Header.Get("Content-Range"); cr != "" {
 						if total := strings.TrimSpace(cr[strings.LastIndex(cr, "/")+1:]); total != "*" {
 							if sz, perr := parseInt64(total); perr == nil && sz > 0 {
-								mu.Lock(); req.Results[i].SizeBytes = sz; req.Results[i].Size = utils.HumanBytes(sz); mu.Unlock(); setCachedSize(streamID, sz); continue
+								mu.Lock()
+								req.Results[i].SizeBytes = sz
+								req.Results[i].Size = utils.HumanBytes(sz)
+								mu.Unlock()
+								setCachedSize(streamID, sz)
+								continue
 							}
 						}
 					}
 					if cl := resp.Header.Get("Content-Length"); cl != "" {
 						if sz, perr := parseInt64(cl); perr == nil && sz > 0 {
-							mu.Lock(); req.Results[i].SizeBytes = sz; req.Results[i].Size = utils.HumanBytes(sz); mu.Unlock(); setCachedSize(streamID, sz); continue
+							mu.Lock()
+							req.Results[i].SizeBytes = sz
+							req.Results[i].Size = utils.HumanBytes(sz)
+							mu.Unlock()
+							setCachedSize(streamID, sz)
+							continue
 						}
 					}
 				}
 			}
 		}
-		for w := 0; w < workers; w++ { wg.Add(1); go workerFn() }
-		for i := start; i < end; i++ { jobs <- job{idx: i} }
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go workerFn()
+		}
+		for i := start; i < end; i++ {
+			jobs <- job{idx: i}
+		}
 		close(jobs)
 		wg.Wait()
 	}
 
 	// Keep ordering stable for the client
-	sort.SliceStable(req.Results, func(i, j int) bool { return strings.ToLower(req.Results[i].Title) < strings.ToLower(req.Results[j].Title) })
+	sort.SliceStable(req.Results, func(i, j int) bool {
+		return strings.ToLower(req.Results[i].Title) < strings.ToLower(req.Results[j].Title)
+	})
 	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{"results": req.Results}})
 }
 
@@ -285,11 +345,11 @@ func (c *Config) createVODDownload(ctx *gin.Context) {
 		// Try to resolve extension from cached M3U (movie/series), then fall back
 		if ext := c.findVODExtensionInCache(basePath, finalID); ext != "" {
 			utils.DebugLog("VOD extension resolved from cache: %s%s", finalID, ext)
-			finalID = finalID + ext
-		} else if basePath == "series" { 
+			finalID += ext
+		} else if basePath == "series" {
 			// Some providers predominantly use .mkv for series
 			utils.DebugLog("VOD extension not found in cache for series id=%s; defaulting to .mkv", finalID)
-			finalID = finalID + ".mkv"
+			finalID += ".mkv"
 		}
 	}
 	vodURL := fmt.Sprintf("%s/%s/%s/%s/%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, finalID)
@@ -313,14 +373,22 @@ func (c *Config) createVODDownload(ctx *gin.Context) {
 		downloadURL = base + "/download/" + token
 	} else {
 		protocol := "http"
-		if c.HTTPS { protocol = "https" }
+		if c.HTTPS {
+			protocol = "https"
+		}
 		hostPart := fmt.Sprintf("%s:%d", c.HostConfig.Hostname, c.HostConfig.Port)
 		if c.ReverseProxyEnabled {
 			// Behind a reverse proxy: drop the port and optionally mirror DiscordAPIURL's scheme/host.
 			if api := strings.TrimSpace(c.DiscordAPIURL); api != "" {
 				if u, err := url.Parse(api); err == nil {
-					if u.Scheme != "" { protocol = u.Scheme }
-					if u.Host != "" { hostPart = u.Host } else { hostPart = c.HostConfig.Hostname }
+					if u.Scheme != "" {
+						protocol = u.Scheme
+					}
+					if u.Host != "" {
+						hostPart = u.Host
+					} else {
+						hostPart = c.HostConfig.Hostname
+					}
 				} else {
 					hostPart = c.HostConfig.Hostname
 				}
@@ -354,11 +422,15 @@ func (c *Config) pickVODExtension(ctx *gin.Context, basePath, streamID string) s
 		tmp := make([]string, 0, len(parts))
 		for _, p := range parts {
 			p = strings.TrimSpace(p)
-			if p == ".mp4" || p == ".mkv" || p == ".ts" || p == "" { tmp = append(tmp, p) }
+			if p == ".mp4" || p == ".mkv" || p == ".ts" || p == "" {
+				tmp = append(tmp, p)
+			}
 		}
-		if len(tmp) > 0 { order = tmp }
+		if len(tmp) > 0 {
+			order = tmp
+		}
 	}
-	client := &http.Client{ Timeout: 3 * time.Second }
+	client := &http.Client{Timeout: 3 * time.Second}
 	for _, ext := range order {
 		probeURL := fmt.Sprintf("%s/%s/%s/%s/%s%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, streamID, ext)
 		req, reqErr := http.NewRequestWithContext(context.Background(), "HEAD", probeURL, nil)
@@ -463,22 +535,27 @@ func (c *Config) startCache(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "days must be between 1 and 14"})
 		return
 	}
-	if req.StreamID == "" { ctx.JSON(http.StatusBadRequest, types.APIResponse{Success:false, Error:"stream_id is required"}); return }
+	if req.StreamID == "" {
+		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "stream_id is required"})
+		return
+	}
 	if strings.Contains(req.StreamID, "/") || strings.Contains(req.StreamID, "..") {
 		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "invalid stream_id"})
 		return
 	}
 	t := strings.ToLower(strings.TrimSpace(req.Type))
-	if t != "movie" && t != "series" { t = "movie" }
+	if t != "movie" && t != "series" {
+		t = "movie"
+	}
 
 	// If already cached and valid, return it
 	if c.db != nil {
 		if entry, err := c.db.GetVODCache(req.StreamID); err == nil && entry != nil && entry.Status == "ready" {
 			_ = c.db.TouchVODCache(req.StreamID)
 			ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
-				"cached": true,
-				"stream_id": entry.StreamID,
-				"status": entry.Status,
+				"cached":     true,
+				"stream_id":  entry.StreamID,
+				"status":     entry.Status,
 				"expires_at": entry.ExpiresAt,
 			}})
 			return
@@ -491,7 +568,9 @@ func (c *Config) startCache(ctx *gin.Context) {
 
 	// Resolve extension to build proper upstream URL
 	basePath := "movie"
-	if t == "series" { basePath = "series" }
+	if t == "series" {
+		basePath = "series"
+	}
 	finalID := req.StreamID
 	if path.Ext(finalID) == "" {
 		// 1) Try to resolve from cached M3U first (movie/series)
@@ -508,7 +587,10 @@ func (c *Config) startCache(ctx *gin.Context) {
 			}
 			// 3) Still unknown? Use sane defaults without probing
 			if path.Ext(finalID) == "" {
-				def := ".mp4"; if basePath == "series" { def = ".mkv" }
+				def := ".mp4"
+				if basePath == "series" {
+					def = ".mkv"
+				}
 				utils.DebugLog("Cache: defaulting extension %s for %s", def, finalID)
 				finalID += def
 			}
@@ -518,7 +600,9 @@ func (c *Config) startCache(ctx *gin.Context) {
 
 	// Build local filename as <id>.<ext> for consistency
 	ext := path.Ext(finalID)
-	if ext == "" { ext = ".mp4" }
+	if ext == "" {
+		ext = ".mp4"
+	}
 	// ensure we use the bare stream id without any accidental extension
 	idOnly := strings.TrimSuffix(req.StreamID, path.Ext(req.StreamID))
 	filename := filepath.Join(baseDir, idOnly+ext)
@@ -535,7 +619,9 @@ func (c *Config) startCache(ctx *gin.Context) {
 	if safeTitle == "" {
 		safeTitle = strings.TrimSpace(req.Title)
 	}
-	if safeTitle == "" { safeTitle = "Unknown title" }
+	if safeTitle == "" {
+		safeTitle = "Unknown title"
+	}
 
 	// Persist a pending entry
 	expires := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
@@ -547,9 +633,9 @@ func (c *Config) startCache(ctx *gin.Context) {
 	go c.fetchToFile(context.Background(), upstream, filename, req.StreamID, expires)
 
 	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
-		"cached": false,
-		"stream_id": req.StreamID,
-		"status": "downloading",
+		"cached":     false,
+		"stream_id":  req.StreamID,
+		"status":     "downloading",
 		"expires_at": expires,
 	}})
 }
@@ -558,87 +644,103 @@ func (c *Config) startCache(ctx *gin.Context) {
 func (c *Config) getCacheByStream(ctx *gin.Context) {
 	id := ctx.Param("streamid")
 	if id == "" || c.db == nil {
-		ctx.JSON(http.StatusNotFound, types.APIResponse{Success:false, Error:"not found"})
+		ctx.JSON(http.StatusNotFound, types.APIResponse{Success: false, Error: "not found"})
 		return
 	}
 	if e, err := c.db.GetVODCache(id); err == nil {
 		// Do not expose internal file paths
 		resp := map[string]interface{}{
-			"stream_id": e.StreamID,
-			"status": e.Status,
+			"stream_id":        e.StreamID,
+			"status":           e.Status,
 			"downloaded_bytes": e.DownloadedBytes,
-			"total_bytes": e.TotalBytes,
-			"size_bytes": e.SizeBytes,
-			"expires_at": e.ExpiresAt,
-			"type": e.Type,
-			"title": e.Title,
-			"series_title": e.SeriesTitle,
-			"season": e.Season,
-			"episode": e.Episode,
+			"total_bytes":      e.TotalBytes,
+			"size_bytes":       e.SizeBytes,
+			"expires_at":       e.ExpiresAt,
+			"type":             e.Type,
+			"title":            e.Title,
+			"series_title":     e.SeriesTitle,
+			"season":           e.Season,
+			"episode":          e.Episode,
 		}
-		ctx.JSON(http.StatusOK, types.APIResponse{Success:true, Data: resp})
+		ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: resp})
 	} else {
-		ctx.JSON(http.StatusNotFound, types.APIResponse{Success:false, Error: err.Error()})
+		ctx.JSON(http.StatusNotFound, types.APIResponse{Success: false, Error: err.Error()})
 	}
 }
 
 // getCacheProgress returns minimal progress info for a given stream id
 func (c *Config) getCacheProgress(ctx *gin.Context) {
 	id := ctx.Param("streamid")
-	if id == "" || c.db == nil { ctx.JSON(http.StatusNotFound, types.APIResponse{Success:false, Error:"not found"}); return }
+	if id == "" || c.db == nil {
+		ctx.JSON(http.StatusNotFound, types.APIResponse{Success: false, Error: "not found"})
+		return
+	}
 	e, err := c.db.GetVODCache(id)
-	if err != nil { ctx.JSON(http.StatusNotFound, types.APIResponse{Success:false, Error: err.Error()}); return }
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
 	// Compute percentage
 	var percent int
 	if e.TotalBytes > 0 {
 		percent = int((e.DownloadedBytes * 100) / e.TotalBytes)
-		if percent > 100 { percent = 100 }
+		if percent > 100 {
+			percent = 100
+		}
 	} else if strings.ToLower(e.Status) == "ready" && e.SizeBytes > 0 {
 		percent = 100
 	}
-	ctx.JSON(http.StatusOK, types.APIResponse{Success:true, Data: map[string]interface{}{
-		"stream_id": e.StreamID,
-		"status": e.Status,
+	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
+		"stream_id":        e.StreamID,
+		"status":           e.Status,
 		"downloaded_bytes": e.DownloadedBytes,
-		"total_bytes": e.TotalBytes,
-		"percent": percent,
-		"expires_at": e.ExpiresAt,
-		"title": e.Title,
-		"series_title": e.SeriesTitle,
-		"season": e.Season,
-		"episode": e.Episode,
-		"requested_by": e.RequestedBy,
+		"total_bytes":      e.TotalBytes,
+		"percent":          percent,
+		"expires_at":       e.ExpiresAt,
+		"title":            e.Title,
+		"series_title":     e.SeriesTitle,
+		"season":           e.Season,
+		"episode":          e.Episode,
+		"requested_by":     e.RequestedBy,
 	}})
 }
 
 // listCache returns active cache entries without exposing file paths
 func (c *Config) listCache(ctx *gin.Context) {
-	if c.db == nil { ctx.JSON(http.StatusOK, types.APIResponse{Success:true, Data: []interface{}{}}); return }
+	if c.db == nil {
+		ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: []interface{}{}})
+		return
+	}
 	list, err := c.db.ListVODCache(0)
-	if err != nil { ctx.JSON(http.StatusInternalServerError, types.APIResponse{Success:false, Error: err.Error()}); return }
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, types.APIResponse{Success: false, Error: err.Error()})
+		return
+	}
 	out := make([]map[string]interface{}, 0, len(list))
 	now := time.Now()
 	for _, e := range list {
 		left := e.ExpiresAt.Sub(now)
-		if left < 0 { left = 0 }
+		if left < 0 {
+			left = 0
+		}
 		item := map[string]interface{}{
-			"stream_id": e.StreamID,
-			"type": e.Type,
-			"title": e.Title,
-			"series_title": e.SeriesTitle,
-			"season": e.Season,
-			"episode": e.Episode,
-			"status": e.Status,
-			"requested_by": e.RequestedBy,
-			"downloaded_bytes": e.DownloadedBytes,
-			"total_bytes": e.TotalBytes,
-			"size_bytes": e.SizeBytes,
-			"expires_at": e.ExpiresAt,
+			"stream_id":         e.StreamID,
+			"type":              e.Type,
+			"title":             e.Title,
+			"series_title":      e.SeriesTitle,
+			"season":            e.Season,
+			"episode":           e.Episode,
+			"status":            e.Status,
+			"requested_by":      e.RequestedBy,
+			"downloaded_bytes":  e.DownloadedBytes,
+			"total_bytes":       e.TotalBytes,
+			"size_bytes":        e.SizeBytes,
+			"expires_at":        e.ExpiresAt,
 			"time_left_seconds": int(left.Seconds()),
 		}
 		out = append(out, item)
 	}
-	ctx.JSON(http.StatusOK, types.APIResponse{Success:true, Data: out})
+	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: out})
 }
 
 // vodCacheClient is used exclusively by fetchToFile. No global timeout so large files
@@ -660,7 +762,11 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 	tmp := dest + ".part"
 
 	f, err := os.Create(tmp)
-	if err != nil { utils.ErrorLog("Cache: create file error: %v", err); c.cacheFail(streamID); return }
+	if err != nil {
+		utils.ErrorLog("Cache: create file error: %v", err)
+		c.cacheFail(streamID)
+		return
+	}
 	defer func() { _ = f.Close() }()
 
 	const maxCacheRetries = 5
@@ -679,12 +785,18 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 			time.Sleep(backoff)
 			// Seek file to current offset so we append correctly on resume
 			if _, seekErr := f.Seek(downloaded, io.SeekStart); seekErr != nil {
-				utils.ErrorLog("Cache: seek error: %v", seekErr); c.cacheFail(streamID); return
+				utils.ErrorLog("Cache: seek error: %v", seekErr)
+				c.cacheFail(streamID)
+				return
 			}
 		}
 
 		req, reqErr := http.NewRequestWithContext(ctx, "GET", upstream, nil)
-		if reqErr != nil { utils.ErrorLog("Cache: failed to build request: %v", reqErr); c.cacheFail(streamID); return }
+		if reqErr != nil {
+			utils.ErrorLog("Cache: failed to build request: %v", reqErr)
+			c.cacheFail(streamID)
+			return
+		}
 		req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 		if downloaded > 0 {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", downloaded))
@@ -702,12 +814,24 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 			if downloaded > 0 {
 				utils.WarnLog("Cache: provider ignored Range header, restarting download for %s", streamID)
 				downloaded = 0
-				if tErr := f.Truncate(0); tErr != nil { _ = resp.Body.Close(); utils.ErrorLog("Cache: truncate error: %v", tErr); c.cacheFail(streamID); return }
-				if _, sErr := f.Seek(0, io.SeekStart); sErr != nil { _ = resp.Body.Close(); utils.ErrorLog("Cache: seek error: %v", sErr); c.cacheFail(streamID); return }
+				if tErr := f.Truncate(0); tErr != nil {
+					_ = resp.Body.Close()
+					utils.ErrorLog("Cache: truncate error: %v", tErr)
+					c.cacheFail(streamID)
+					return
+				}
+				if _, sErr := f.Seek(0, io.SeekStart); sErr != nil {
+					_ = resp.Body.Close()
+					utils.ErrorLog("Cache: seek error: %v", sErr)
+					c.cacheFail(streamID)
+					return
+				}
 			}
 			if total == 0 {
 				if cl := resp.Header.Get("Content-Length"); cl != "" {
-					if v, pErr := strconv.ParseInt(cl, 10, 64); pErr == nil { total = v }
+					if v, pErr := strconv.ParseInt(cl, 10, 64); pErr == nil {
+						total = v
+					}
 				}
 			}
 		case http.StatusPartialContent:
@@ -716,7 +840,9 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 				if cr := resp.Header.Get("Content-Range"); cr != "" {
 					if idx := strings.LastIndex(cr, "/"); idx >= 0 {
 						if t := strings.TrimSpace(cr[idx+1:]); t != "*" {
-							if v, pErr := strconv.ParseInt(t, 10, 64); pErr == nil { total = v }
+							if v, pErr := strconv.ParseInt(t, 10, 64); pErr == nil {
+								total = v
+							}
 						}
 					}
 				}
@@ -734,7 +860,9 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 			if nr > 0 {
 				if _, ew := f.Write(buf[:nr]); ew != nil {
 					_ = resp.Body.Close()
-					utils.ErrorLog("Cache: write error: %v", ew); c.cacheFail(streamID); return
+					utils.ErrorLog("Cache: write error: %v", ew)
+					c.cacheFail(streamID)
+					return
 				}
 				downloaded += int64(nr)
 				if c.db != nil && time.Since(lastUpdate) > 1*time.Second {
@@ -742,7 +870,10 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 					lastUpdate = time.Now()
 				}
 			}
-			if er != nil { readErr = er; break }
+			if er != nil {
+				readErr = er
+				break
+			}
 		}
 		_ = resp.Body.Close()
 
@@ -769,25 +900,35 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 	}
 
 	n := downloaded
-	if err := f.Sync(); err != nil { utils.WarnLog("Cache: fsync warning: %v", err) }
-	if err := os.Rename(tmp, dest); err != nil { utils.ErrorLog("Cache: rename error: %v", err); c.cacheFail(streamID); return }
+	if err := f.Sync(); err != nil {
+		utils.WarnLog("Cache: fsync warning: %v", err)
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		utils.ErrorLog("Cache: rename error: %v", err)
+		c.cacheFail(streamID)
+		return
+	}
 	utils.InfoLog("Caching done: %s (%s)", dest, utils.HumanBytes(n))
 	if c.db != nil {
 		basePath := "movie"
-		if strings.Contains(upstream, "/series/") { basePath = "series" }
+		if strings.Contains(upstream, "/series/") {
+			basePath = "series"
+		}
 		var finalTitle string
 		if t := c.findVODTitleInCache(basePath, streamID); strings.TrimSpace(t) != "" {
 			finalTitle = strings.TrimSpace(t)
 		}
 		entry := &types.VODCacheEntry{StreamID: streamID, FilePath: dest, DownloadedBytes: n, TotalBytes: n, SizeBytes: n, Status: "ready", ExpiresAt: expires, LastAccess: time.Now()}
-		if finalTitle != "" { entry.Title = finalTitle }
+		if finalTitle != "" {
+			entry.Title = finalTitle
+		}
 		_ = c.db.UpsertVODCache(entry)
 	}
 }
 
 func (c *Config) cacheFail(streamID string) {
 	if c.db != nil {
-		_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: streamID, Status: "failed", LastAccess: time.Now(), ExpiresAt: time.Now().Add(2*time.Hour)})
+		_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: streamID, Status: "failed", LastAccess: time.Now(), ExpiresAt: time.Now().Add(2 * time.Hour)})
 	}
 }
 
@@ -795,17 +936,27 @@ func (c *Config) cacheFail(streamID string) {
 // the last segment starting with streamID plus an extension.
 func findExtInM3U(filePath, basePath, streamID string) string {
 	f, err := os.Open(filePath)
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") { continue }
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") { continue }
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			continue
+		}
 		// Quick path filter by basePath
-		if !strings.Contains(line, "/"+basePath+"/") { continue }
+		if !strings.Contains(line, "/"+basePath+"/") {
+			continue
+		}
 		u, err := url.Parse(line)
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		last := path.Base(u.Path)
 		if strings.HasPrefix(last, streamID+".") {
 			return path.Ext(last)
@@ -817,13 +968,17 @@ func findExtInM3U(filePath, basePath, streamID string) string {
 // findTitleInM3U scans for the #EXTINF title associated to a given streamID URL
 func findTitleInM3U(filePath, basePath, streamID string) string {
 	f, err := os.Open(filePath)
-	if err != nil { return "" }
+	if err != nil {
+		return ""
+	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	lastExtinf := ""
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if line == "" { continue }
+		if line == "" {
+			continue
+		}
 		if strings.HasPrefix(line, "#EXTINF") {
 			// Capture the text after the comma as the display title
 			if idx := strings.LastIndex(line, ","); idx != -1 && idx+1 < len(line) {
@@ -833,10 +988,16 @@ func findTitleInM3U(filePath, basePath, streamID string) string {
 			}
 			continue
 		}
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") { continue }
-		if !strings.Contains(line, "/"+basePath+"/") { continue }
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			continue
+		}
+		if !strings.Contains(line, "/"+basePath+"/") {
+			continue
+		}
 		u, err := url.Parse(line)
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		last := path.Base(u.Path)
 		if strings.HasPrefix(last, streamID+".") {
 			return lastExtinf
@@ -850,11 +1011,15 @@ func findTitleInM3U(filePath, basePath, streamID string) string {
 // findVODTitleInCache tries to locate the display title for a given stream ID from cached M3U(s)
 func (c *Config) findVODTitleInCache(basePath, streamID string) string {
 	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if t := findTitleInM3U(m3uPath, basePath, streamID); t != "" { return t }
+		if t := findTitleInM3U(m3uPath, basePath, streamID); t != "" {
+			return t
+		}
 	}
 	c.ensureChannelIndex()
 	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if t := findTitleInM3U(c.proxyfiedM3UPath, basePath, streamID); t != "" { return t }
+		if t := findTitleInM3U(c.proxyfiedM3UPath, basePath, streamID); t != "" {
+			return t
+		}
 	}
 	return ""
 }

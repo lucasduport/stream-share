@@ -15,60 +15,60 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 package discord
 
 import (
-    "bytes"
-    "encoding/json"
-    "fmt"
-    "net/http"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
 )
 
 // makeAPIRequest centralizes internal API calls with auth headers and JSON handling.
 // It uses the default short-timeout client. Use makeSlowAPIRequest for endpoints that
 // may take longer (e.g. /vod/search on large libraries).
 func (b *Bot) makeAPIRequest(method, endpoint string, body interface{}) (bool, interface{}, error) {
-    return b.doAPIRequest(b.client, method, endpoint, body)
+	return b.doAPIRequest(b.client, method, endpoint, body)
 }
 
 // makeSlowAPIRequest is like makeAPIRequest but uses a longer timeout, suitable for
 // endpoints that scan large catalogues (e.g. /vod/search, /cache/list).
 func (b *Bot) makeSlowAPIRequest(method, endpoint string, body interface{}) (bool, interface{}, error) {
-    return b.doAPIRequest(b.slowClient, method, endpoint, body)
+	return b.doAPIRequest(b.slowClient, method, endpoint, body)
 }
 
 func (b *Bot) doAPIRequest(client *http.Client, method, endpoint string, body interface{}) (bool, interface{}, error) {
-    url := b.apiURL + "/api/internal" + endpoint
+	url := b.apiURL + "/api/internal" + endpoint
 
-    var reqBody []byte
-    var err error
-    if body != nil {
-        reqBody, err = json.Marshal(body)
-        if err != nil {
-            return false, nil, err
-        }
-    }
+	var reqBody []byte
+	var err error
+	if body != nil {
+		reqBody, err = json.Marshal(body)
+		if err != nil {
+			return false, nil, err
+		}
+	}
 
-    req, err := http.NewRequest(method, url, bytes.NewBuffer(reqBody))
-    if err != nil {
-        return false, nil, err
-    }
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("X-API-Key", b.apiKey)
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return false, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", b.apiKey)
 
-    resp, err := client.Do(req)
-    if err != nil {
-        return false, nil, err
-    }
-    defer func() { _ = resp.Body.Close() }()
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
 
-    var apiResp map[string]interface{}
-    if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
-        return false, nil, err
-    }
-    if ok, _ := apiResp["success"].(bool); !ok {
-        return false, apiResp["data"], fmt.Errorf("%v", apiResp["error"])
-    }
-    return true, apiResp["data"], nil
+	var apiResp map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return false, nil, err
+	}
+	if ok, _ := apiResp["success"].(bool); !ok {
+		return false, apiResp["data"], fmt.Errorf("%v", apiResp["error"])
+	}
+	return true, apiResp["data"], nil
 }

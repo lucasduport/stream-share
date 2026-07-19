@@ -15,24 +15,24 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 package database
 
 import (
-    "fmt"
+	"fmt"
 
-    "github.com/lucasduport/stream-share/pkg/utils"
+	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
 // initSchema creates database tables if they don't exist
 func (m *DBManager) initSchema() error {
-    utils.InfoLog("Initializing database schema")
+	utils.InfoLog("Initializing database schema")
 
-    if m == nil || m.db == nil {
-        return fmt.Errorf("database not initialized")
-    }
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
 
-    if _, err := m.db.Exec(`
+	if _, err := m.db.Exec(`
         CREATE TABLE IF NOT EXISTS discord_ldap_mapping (
             discord_id TEXT PRIMARY KEY,
             discord_name TEXT NOT NULL,
@@ -41,11 +41,11 @@ func (m *DBManager) initSchema() error {
             last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     `); err != nil {
-        utils.ErrorLog("Failed to create discord_ldap_mapping table: %v", err)
-        return fmt.Errorf("failed to create discord_ldap_mapping table: %w", err)
-    }
+		utils.ErrorLog("Failed to create discord_ldap_mapping table: %v", err)
+		return fmt.Errorf("failed to create discord_ldap_mapping table: %w", err)
+	}
 
-    if _, err := m.db.Exec(`
+	if _, err := m.db.Exec(`
         CREATE TABLE IF NOT EXISTS stream_history (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL,
@@ -59,11 +59,11 @@ func (m *DBManager) initSchema() error {
             user_agent TEXT
         )
     `); err != nil {
-        utils.ErrorLog("Failed to create stream_history table: %v", err)
-        return fmt.Errorf("failed to create stream_history table: %w", err)
-    }
+		utils.ErrorLog("Failed to create stream_history table: %v", err)
+		return fmt.Errorf("failed to create stream_history table: %w", err)
+	}
 
-    if _, err := m.db.Exec(`
+	if _, err := m.db.Exec(`
         CREATE TABLE IF NOT EXISTS temporary_links (
             token TEXT PRIMARY KEY,
             username TEXT NOT NULL,
@@ -74,11 +74,11 @@ func (m *DBManager) initSchema() error {
             title TEXT
         )
     `); err != nil {
-        utils.ErrorLog("Failed to create temporary_links table: %v", err)
-        return fmt.Errorf("failed to create temporary_links table: %w", err)
-    }
+		utils.ErrorLog("Failed to create temporary_links table: %v", err)
+		return fmt.Errorf("failed to create temporary_links table: %w", err)
+	}
 
-    if _, err := m.db.Exec(`
+	if _, err := m.db.Exec(`
         CREATE TABLE IF NOT EXISTS vod_cache (
             stream_id TEXT PRIMARY KEY,
             type TEXT NOT NULL,
@@ -97,11 +97,11 @@ func (m *DBManager) initSchema() error {
             last_access TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     `); err != nil {
-        utils.ErrorLog("Failed to create vod_cache table: %v", err)
-        return fmt.Errorf("failed to create vod_cache table: %w", err)
-    }
+		utils.ErrorLog("Failed to create vod_cache table: %v", err)
+		return fmt.Errorf("failed to create vod_cache table: %w", err)
+	}
 
-    if _, err := m.db.Exec(`
+	if _, err := m.db.Exec(`
         CREATE TABLE IF NOT EXISTS stream_names (
             stream_id      TEXT NOT NULL,
             source         TEXT NOT NULL,
@@ -111,15 +111,15 @@ func (m *DBManager) initSchema() error {
             PRIMARY KEY (stream_id, source)
         )
     `); err != nil {
-        utils.ErrorLog("Failed to create stream_names table: %v", err)
-        return fmt.Errorf("failed to create stream_names table: %w", err)
-    }
+		utils.ErrorLog("Failed to create stream_names table: %v", err)
+		return fmt.Errorf("failed to create stream_names table: %w", err)
+	}
 
-    // Migration: add epg_channel_id column to existing stream_names tables.
-    if _, err := m.db.Exec(`ALTER TABLE stream_names ADD COLUMN IF NOT EXISTS epg_channel_id TEXT NOT NULL DEFAULT ''`); err != nil {
-        return fmt.Errorf("failed to add epg_channel_id to stream_names: %w", err)
-    }
+	// Migration: add epg_channel_id column to existing stream_names tables.
+	if _, err := m.db.Exec(`ALTER TABLE stream_names ADD COLUMN IF NOT EXISTS epg_channel_id TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("failed to add epg_channel_id to stream_names: %w", err)
+	}
 
-    utils.InfoLog("Database schema initialized successfully")
-    return nil
+	utils.InfoLog("Database schema initialized successfully")
+	return nil
 }

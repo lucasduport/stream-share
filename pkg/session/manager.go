@@ -509,6 +509,10 @@ func (sm *SessionManager) deliver(buffer *StreamBuffer, cl *streamClient, chunk 
 		}
 		return false
 	}
+	// Use an explicit timer (stopped on the fast path) rather than time.After,
+	// which would otherwise leave one live timer per chunk until it fires.
+	stall := time.NewTimer(sm.clientStallTimeout)
+	defer stall.Stop()
 	select {
 	case cl.ch <- chunk:
 		return false
@@ -516,7 +520,7 @@ func (sm *SessionManager) deliver(buffer *StreamBuffer, cl *streamClient, chunk 
 		return false
 	case <-buffer.stopChan:
 		return false
-	case <-time.After(sm.clientStallTimeout):
+	case <-stall.C:
 		cl.close()
 		return true
 	}
@@ -571,6 +575,10 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 	// that every read/write of buffer.active stays under sm.streamLock.
 	dataBuffer := make([]byte, streamChunkSize)
 
+	// LastRequested only needs to stay fresh relative to streamTimeout (minutes),
+	// so throttle the streamLock update rather than taking the lock per chunk.
+	var lastTouch time.Time
+
 	for {
 		// Stop requested
 		select {
@@ -593,12 +601,15 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 				buffer.diskBuffer.Write(chunk)
 			}
 
-			// Touch stream LastRequested to avoid cleanup timeout while data flows
-			sm.streamLock.Lock()
-			if ss, ok := sm.streamSessions[buffer.streamID]; ok {
-				ss.LastRequested = time.Now()
+			// Touch stream LastRequested to avoid cleanup timeout while data flows.
+			if now := time.Now(); now.Sub(lastTouch) >= time.Second {
+				lastTouch = now
+				sm.streamLock.Lock()
+				if ss, ok := sm.streamSessions[buffer.streamID]; ok {
+					ss.LastRequested = now
+				}
+				sm.streamLock.Unlock()
 			}
-			sm.streamLock.Unlock()
 		}
 		if rerr != nil {
 			if rerr != io.EOF && ctx.Err() == nil {
@@ -624,17 +635,23 @@ func (sm *SessionManager) fanOut(buffer *StreamBuffer, chunk []byte) {
 	}
 	buffer.clientsLock.RUnlock()
 
-	if len(targets) == 0 {
+	switch len(targets) {
+	case 0:
+		return
+	case 1:
+		// Sole viewer: deliver inline on the pump goroutine (no fan-out
+		// goroutine or WaitGroup). deliver never drops the sole client, so
+		// there is nothing to remove afterwards.
+		sm.deliver(buffer, targets[0], chunk, true)
 		return
 	}
-	sole := len(targets) == 1
 
 	var wg sync.WaitGroup
+	wg.Add(len(targets))
 	for i := range targets {
-		wg.Add(1)
 		go func(name string, cl *streamClient) {
 			defer wg.Done()
-			if sm.deliver(buffer, cl, chunk, sole) {
+			if sm.deliver(buffer, cl, chunk, false) {
 				utils.WarnLog("Dropping slow client %s from %s (buffer stalled)", name, sm.streamLabel(buffer.streamID))
 				sm.RemoveClient(buffer.streamID, name)
 			}

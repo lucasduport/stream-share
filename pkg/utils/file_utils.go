@@ -69,7 +69,7 @@ func WriteResponseToFileWithOverwrite(ctx *gin.Context, resp interface{}, overwr
 	}
 
 	// Generate filename with correct extension
-	filename := filepath.Join(cacheDir, url.QueryEscape(urlString) + extension)
+	filename := filepath.Join(cacheDir, url.QueryEscape(urlString)+extension)
 
 	// Convert the response to a string
 	respString := ConvertResponseToString(resp)

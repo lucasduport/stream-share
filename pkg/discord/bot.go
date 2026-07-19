@@ -21,9 +21,9 @@ package discord
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
-	"os"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/lucasduport/stream-share/pkg/types"
@@ -54,19 +54,19 @@ func NewIntegration() (*Integration, error) {
 	if token == "" {
 		utils.WarnLog("Discord bot token not provided - bot functionality disabled")
 	} else {
-	adminRole := os.Getenv("DISCORD_ADMIN_ROLE_ID")
-	apiURL := os.Getenv("DISCORD_API_URL")
-	apiKey := os.Getenv("INTERNAL_API_KEY")
+		adminRole := os.Getenv("DISCORD_ADMIN_ROLE_ID")
+		apiURL := os.Getenv("DISCORD_API_URL")
+		apiKey := os.Getenv("INTERNAL_API_KEY")
 		if apiKey == "" {
 			utils.ErrorLog("INTERNAL_API_KEY not set, Discord bot will not be able to communicate with API")
 		}
-	bot, err := NewBot(token, adminRole, apiURL, apiKey)
+		bot, err := NewBot(token, adminRole, apiURL, apiKey)
 		if err != nil {
 			utils.ErrorLog("Failed to initialize Discord bot: %v", err)
 			return nil, err
 		}
 		integration.Bot = bot
-	utils.InfoLog("Discord bot initialized")
+		utils.InfoLog("Discord bot initialized")
 	}
 
 	integration.initialized = true
@@ -155,9 +155,16 @@ func NewBot(token, adminRoleID, apiURL, apiKey string) (*Bot, error) {
 // Start starts the Discord bot
 func (b *Bot) Start() error {
 	utils.InfoLog("Starting Discord bot with intents: Guilds, GuildMessages, DirectMessages, MessageContent, Reactions")
-	if err := b.session.Open(); err != nil { return err }
+	if err := b.session.Open(); err != nil {
+		return err
+	}
 	// Register slash commands once here to avoid duplicate registrations on reconnects
-	utils.InfoLog("Slash commands: registering %s-scoped commands…", func() string { if b.devGuildID != "" { return "guild" } ; return "global" }())
+	utils.InfoLog("Slash commands: registering %s-scoped commands…", func() string {
+		if b.devGuildID != "" {
+			return "guild"
+		}
+		return "global"
+	}())
 	if err := b.cleanupExistingCommands(); err != nil {
 		utils.WarnLog("Failed to cleanup existing commands: %v", err)
 	}

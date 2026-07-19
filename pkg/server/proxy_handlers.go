@@ -19,17 +19,17 @@
 package server
 
 import (
-    "fmt"
-    "io"
-    "net"
-    "net/http"
-    "net/url"
-    "path"
-    "strings"
-    "time"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"time"
 
-    "github.com/gin-gonic/gin"
-    "github.com/lucasduport/stream-share/pkg/utils"
+	"github.com/gin-gonic/gin"
+	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
 // streamTransport is shared across all stream() calls so that TCP connections
@@ -53,140 +53,146 @@ var streamHTTPClient = &http.Client{Transport: streamTransport}
 
 // getM3U sends the proxified M3U file generated during bootstrap.
 func (c *Config) getM3U(ctx *gin.Context) {
-    ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))
-    ctx.Header("Content-Type", "application/octet-stream")
-    ctx.File(c.proxyfiedM3UPath)
+	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))
+	ctx.Header("Content-Type", "application/octet-stream")
+	ctx.File(c.proxyfiedM3UPath)
 }
 
 // reverseProxy forwards a track request to the upstream using Xtream creds.
 func (c *Config) reverseProxy(ctx *gin.Context) {
-    rpURL, err := url.Parse(c.track.URI)
-    if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
-        return
-    }
+	rpURL, err := url.Parse(c.track.URI)
+	if err != nil {
+		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
+		return
+	}
 
-    // Always use Xtream creds for upstream query
-    q := rpURL.Query()
-    q.Set("username", c.XtreamUser.String())
-    q.Set("password", c.XtreamPassword.String())
-    rpURL.RawQuery = q.Encode()
+	// Always use Xtream creds for upstream query
+	q := rpURL.Query()
+	q.Set("username", c.XtreamUser.String())
+	q.Set("password", c.XtreamPassword.String())
+	rpURL.RawQuery = q.Encode()
 
-    utils.DebugLog("-> Upstream username: %s", c.XtreamUser.String())
-    utils.DebugLog("-> Final upstream URL: %s", rpURL.String())
+	utils.DebugLog("-> Upstream username: %s", c.XtreamUser.String())
+	utils.DebugLog("-> Final upstream URL: %s", rpURL.String())
 
-    c.stream(ctx, rpURL)
+	c.stream(ctx, rpURL)
 }
 
 // m3u8ReverseProxy forwards HLS index/chunk requests to upstream using Xtream creds.
 func (c *Config) m3u8ReverseProxy(ctx *gin.Context) {
-    id := ctx.Param("id")
-    rpURL, err := url.Parse(strings.ReplaceAll(c.track.URI, path.Base(c.track.URI), id))
-    if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
-        return
-    }
+	id := ctx.Param("id")
+	rpURL, err := url.Parse(strings.ReplaceAll(c.track.URI, path.Base(c.track.URI), id))
+	if err != nil {
+		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
+		return
+	}
 
-    q := rpURL.Query()
-    q.Set("username", c.XtreamUser.String())
-    q.Set("password", c.XtreamPassword.String())
-    rpURL.RawQuery = q.Encode()
+	q := rpURL.Query()
+	q.Set("username", c.XtreamUser.String())
+	q.Set("password", c.XtreamPassword.String())
+	rpURL.RawQuery = q.Encode()
 
-    utils.DebugLog("-> Upstream username: %s", c.XtreamUser.String())
-    utils.DebugLog("-> Final upstream URL: %s", rpURL.String())
+	utils.DebugLog("-> Upstream username: %s", c.XtreamUser.String())
+	utils.DebugLog("-> Final upstream URL: %s", rpURL.String())
 
-    c.stream(ctx, rpURL)
+	c.stream(ctx, rpURL)
 }
 
 // stream proxies the content from upstream to the client, preserving status
 // and most headers, while normalizing VOD header sets for stricter providers.
 func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
-    utils.DebugLog("-> Streaming request URL: %s", ctx.Request.URL)
-    utils.DebugLog("-> Proxying to upstream URL: %s", oriURL.String())
+	utils.DebugLog("-> Streaming request URL: %s", ctx.Request.URL)
+	utils.DebugLog("-> Proxying to upstream URL: %s", oriURL.String())
 
-    // Prepare the upstream request (bound to client context so it cancels if client disconnects)
-    req, err := http.NewRequestWithContext(ctx.Request.Context(), "GET", oriURL.String(), nil)
-    if err != nil {
-        utils.ErrorLog("Failed to create request: %v", err)
-        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
-        return
-    }
+	// Prepare the upstream request (bound to client context so it cancels if client disconnects)
+	req, err := http.NewRequestWithContext(ctx.Request.Context(), "GET", oriURL.String(), nil)
+	if err != nil {
+		utils.ErrorLog("Failed to create request: %v", err)
+		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+		return
+	}
 
-    // For VOD endpoints, some providers are extremely strict: use a whitelist header set
-    p := oriURL.Path
-    isVOD := isVODPath(p)
+	// For VOD endpoints, some providers are extremely strict: use a whitelist header set
+	p := oriURL.Path
+	isVOD := isVODPath(p)
 
-    if isVOD {
-        req.Header = prepareVODHeaders(ctx)
-    } else {
-        // Non-VOD: copy and normalize minimally
-        mergeHttpHeader(req.Header, ctx.Request.Header)
-        req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-        req.Header.Del("Accept-Encoding")
-        req.Header.Set("Accept-Encoding", "identity")
-        if req.Header.Get("Accept") == "" { req.Header.Set("Accept", "*/*") }
-        if req.Header.Get("Connection") == "" { req.Header.Set("Connection", "keep-alive") }
-    }
+	if isVOD {
+		req.Header = prepareVODHeaders(ctx)
+	} else {
+		// Non-VOD: copy and normalize minimally
+		mergeHttpHeader(req.Header, ctx.Request.Header)
+		req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
+		req.Header.Del("Accept-Encoding")
+		req.Header.Set("Accept-Encoding", "identity")
+		if req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "*/*")
+		}
+		if req.Header.Get("Connection") == "" {
+			req.Header.Set("Connection", "keep-alive")
+		}
+	}
 
-    // Execute the upstream request
-    resp, err := streamHTTPClient.Do(req)
-    if err != nil {
-        utils.DebugLog("-> Upstream request error: %v", err)
-        _ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
-        return
-    }
-    defer func() { _ = resp.Body.Close() }()
+	// Execute the upstream request
+	resp, err := streamHTTPClient.Do(req)
+	if err != nil {
+		utils.DebugLog("-> Upstream request error: %v", err)
+		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
 
-    utils.DebugLog("-> Upstream response status: %d", resp.StatusCode)
-    if resp.StatusCode == 461 {
-        utils.DebugLog("Upstream returned 461 (often blocks HEAD/Range or unexpected headers). UA=%q, AE=%q", req.Header.Get("User-Agent"), req.Header.Get("Accept-Encoding"))
-    }
+	utils.DebugLog("-> Upstream response status: %d", resp.StatusCode)
+	if resp.StatusCode == 461 {
+		utils.DebugLog("Upstream returned 461 (often blocks HEAD/Range or unexpected headers). UA=%q, AE=%q", req.Header.Get("User-Agent"), req.Header.Get("Accept-Encoding"))
+	}
 
-    // Copy response headers and status code
-    mergeHttpHeader(ctx.Writer.Header(), resp.Header)
-    status := resp.StatusCode
-    // If the client did not send a Range header but upstream returned 206, the player
-    // will get confused (it expected 200) and immediately drop the connection.
-    // Normalize to 200 and convert Content-Range into Content-Length.
-    if status == http.StatusPartialContent && ctx.Request.Header.Get("Range") == "" {
-        status = http.StatusOK
-        if cr := ctx.Writer.Header().Get("Content-Range"); cr != "" {
-            if idx := strings.LastIndex(cr, "/"); idx >= 0 {
-                if total := strings.TrimSpace(cr[idx+1:]); total != "*" && total != "" {
-                    ctx.Writer.Header().Set("Content-Length", total)
-                }
-            }
-        }
-        ctx.Writer.Header().Del("Content-Range")
-    }
-    ctx.Status(status)
+	// Copy response headers and status code
+	mergeHttpHeader(ctx.Writer.Header(), resp.Header)
+	status := resp.StatusCode
+	// If the client did not send a Range header but upstream returned 206, the player
+	// will get confused (it expected 200) and immediately drop the connection.
+	// Normalize to 200 and convert Content-Range into Content-Length.
+	if status == http.StatusPartialContent && ctx.Request.Header.Get("Range") == "" {
+		status = http.StatusOK
+		if cr := ctx.Writer.Header().Get("Content-Range"); cr != "" {
+			if idx := strings.LastIndex(cr, "/"); idx >= 0 {
+				if total := strings.TrimSpace(cr[idx+1:]); total != "*" && total != "" {
+					ctx.Writer.Header().Set("Content-Length", total)
+				}
+			}
+		}
+		ctx.Writer.Header().Del("Content-Range")
+	}
+	ctx.Status(status)
 
-    // Stream the response body to the client with flushes
-    w := ctx.Writer
-    buf := make([]byte, 64*1024)
+	// Stream the response body to the client with flushes
+	w := ctx.Writer
+	buf := make([]byte, 64*1024)
 
-    for {
-        // Respect client cancellation
-        select {
-        case <-ctx.Request.Context().Done():
-            utils.DebugLog("Client cancelled stream for URL: %s", ctx.Request.URL)
-            return
-        default:
-        }
+	for {
+		// Respect client cancellation
+		select {
+		case <-ctx.Request.Context().Done():
+			utils.DebugLog("Client cancelled stream for URL: %s", ctx.Request.URL)
+			return
+		default:
+		}
 
-        n, rerr := resp.Body.Read(buf)
-        if n > 0 {
-            if _, werr := w.Write(buf[:n]); werr != nil {
-                utils.DebugLog("Client write error: %v", werr)
-                return
-            }
-            if f, ok := w.(http.Flusher); ok { f.Flush() }
-        }
-        if rerr != nil {
-            if rerr != io.EOF {
-                utils.DebugLog("Upstream read error: %v", rerr)
-            }
-            return
-        }
-    }
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				utils.DebugLog("Client write error: %v", werr)
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		if rerr != nil {
+			if rerr != io.EOF {
+				utils.DebugLog("Upstream read error: %v", rerr)
+			}
+			return
+		}
+	}
 }

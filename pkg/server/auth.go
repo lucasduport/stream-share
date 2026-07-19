@@ -86,179 +86,179 @@ func (c *Config) apiKeyAuth() gin.HandlerFunc {
 // authRequest represents credentials supplied via form/query params
 // for endpoints using GET/POST with standard query binding.
 type authRequest struct {
-    Username string `form:"username" binding:"required"`
-    Password string `form:"password" binding:"required"`
+	Username string `form:"username" binding:"required"`
+	Password string `form:"password" binding:"required"`
 }
 
 // authenticate validates form/query credentials using LDAP (if enabled) or
 // local credentials. Used for GET/POST endpoints.
 func (c *Config) authenticate(ctx *gin.Context) {
-    utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL)
-    var authReq authRequest
-    if err := ctx.Bind(&authReq); err != nil {
-        utils.DebugLog("Bind error: %v", err)
-        _ = ctx.AbortWithError(http.StatusBadRequest, err)
-        return
-    }
+	utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL)
+	var authReq authRequest
+	if err := ctx.Bind(&authReq); err != nil {
+		utils.DebugLog("Bind error: %v", err)
+		_ = ctx.AbortWithError(http.StatusBadRequest, err)
+		return
+	}
 
-    // Only use LDAP authentication to validate client access
-    if c.LDAPEnabled {
-        utils.DebugLog("LDAP authentication enabled for user: %s", authReq.Username)
-        ok := ldapAuthenticate(
-            c.LDAPServer,
-            c.LDAPBaseDN,
-            c.LDAPBindDN,
-            c.LDAPBindPassword,
-            c.LDAPUserAttribute,
-            c.LDAPGroupAttribute,
-            c.LDAPRequiredGroup,
-            authReq.Username,
-            authReq.Password,
-        )
-        if !ok {
-            utils.DebugLog("LDAP authentication failed for user: %s", authReq.Username)
-            ctx.AbortWithStatus(http.StatusUnauthorized)
-            return
-        }
-        utils.DebugLog("LDAP authentication succeeded for user: %s", authReq.Username)
-        return
-    }
+	// Only use LDAP authentication to validate client access
+	if c.LDAPEnabled {
+		utils.DebugLog("LDAP authentication enabled for user: %s", authReq.Username)
+		ok := ldapAuthenticate(
+			c.LDAPServer,
+			c.LDAPBaseDN,
+			c.LDAPBindDN,
+			c.LDAPBindPassword,
+			c.LDAPUserAttribute,
+			c.LDAPGroupAttribute,
+			c.LDAPRequiredGroup,
+			authReq.Username,
+			authReq.Password,
+		)
+		if !ok {
+			utils.DebugLog("LDAP authentication failed for user: %s", authReq.Username)
+			ctx.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		utils.DebugLog("LDAP authentication succeeded for user: %s", authReq.Username)
+		return
+	}
 
-    // If LDAP is not enabled, fallback to local credentials
-    utils.DebugLog("Local authentication for user: %s", authReq.Username)
-    userMatch := subtle.ConstantTimeCompare([]byte(c.User.String()), []byte(authReq.Username))
-    passMatch := subtle.ConstantTimeCompare([]byte(c.Password.String()), []byte(authReq.Password))
-    if userMatch&passMatch != 1 {
-        utils.DebugLog("Local authentication failed for user: %s", authReq.Username)
-        ctx.AbortWithStatus(http.StatusUnauthorized)
-    }
+	// If LDAP is not enabled, fallback to local credentials
+	utils.DebugLog("Local authentication for user: %s", authReq.Username)
+	userMatch := subtle.ConstantTimeCompare([]byte(c.User.String()), []byte(authReq.Username))
+	passMatch := subtle.ConstantTimeCompare([]byte(c.Password.String()), []byte(authReq.Password))
+	if userMatch&passMatch != 1 {
+		utils.DebugLog("Local authentication failed for user: %s", authReq.Username)
+		ctx.AbortWithStatus(http.StatusUnauthorized)
+	}
 }
 
 // appAuthenticate validates credentials for application/x-www-form-urlencoded
 // bodies (player_api POST). It replays the body to allow downstream reading.
 func (c *Config) appAuthenticate(ctx *gin.Context) {
-    utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL)
+	utils.DebugLog("-> Incoming URL: %s", ctx.Request.URL)
 
-    contents, err := io.ReadAll(ctx.Request.Body)
-    if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
-        return
-    }
+	contents, err := io.ReadAll(ctx.Request.Body)
+	if err != nil {
+		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
+		return
+	}
 
-    q, err := url.ParseQuery(string(contents))
-    if err != nil {
-        ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
-        return
-    }
-    if len(q["username"]) == 0 || len(q["password"]) == 0 {
-        ctx.AbortWithError(http.StatusBadRequest, fmt.Errorf("bad body url query parameters")) // nolint: errcheck
-        return
-    }
-    log.Printf("[stream-share] %v | %s |App Auth\n", time.Now().Format("2006/01/02 - 15:04:05"), ctx.ClientIP())
+	q, err := url.ParseQuery(string(contents))
+	if err != nil {
+		ctx.AbortWithError(http.StatusInternalServerError, err) // nolint: errcheck
+		return
+	}
+	if len(q["username"]) == 0 || len(q["password"]) == 0 {
+		ctx.AbortWithError(http.StatusBadRequest, fmt.Errorf("bad body url query parameters")) // nolint: errcheck
+		return
+	}
+	log.Printf("[stream-share] %v | %s |App Auth\n", time.Now().Format("2006/01/02 - 15:04:05"), ctx.ClientIP())
 
-    // Use LDAP authentication if enabled
-    if c.LDAPEnabled {
-        utils.DebugLog("LDAP app authentication for user: %s", q["username"][0])
-        ok := ldapAuthenticate(
-            c.LDAPServer,
-            c.LDAPBaseDN,
-            c.LDAPBindDN,
-            c.LDAPBindPassword,
-            c.LDAPUserAttribute,
-            c.LDAPGroupAttribute,
-            c.LDAPRequiredGroup,
-            q["username"][0],
-            q["password"][0],
-        )
-        if !ok {
-            utils.DebugLog("LDAP app authentication failed for user: %s", q["username"][0])
-            ctx.AbortWithStatus(http.StatusUnauthorized)
-            return
-        }
-        utils.DebugLog("LDAP app authentication succeeded for user: %s", q["username"][0])
-    } else {
-        userMatch := subtle.ConstantTimeCompare([]byte(c.User.String()), []byte(q["username"][0]))
-        passMatch := subtle.ConstantTimeCompare([]byte(c.Password.String()), []byte(q["password"][0]))
-        if userMatch&passMatch != 1 {
-            utils.DebugLog("Local app authentication failed for user: %s", q["username"][0])
-            ctx.AbortWithStatus(http.StatusUnauthorized)
-            return
-        }
-    }
+	// Use LDAP authentication if enabled
+	if c.LDAPEnabled {
+		utils.DebugLog("LDAP app authentication for user: %s", q["username"][0])
+		ok := ldapAuthenticate(
+			c.LDAPServer,
+			c.LDAPBaseDN,
+			c.LDAPBindDN,
+			c.LDAPBindPassword,
+			c.LDAPUserAttribute,
+			c.LDAPGroupAttribute,
+			c.LDAPRequiredGroup,
+			q["username"][0],
+			q["password"][0],
+		)
+		if !ok {
+			utils.DebugLog("LDAP app authentication failed for user: %s", q["username"][0])
+			ctx.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+		utils.DebugLog("LDAP app authentication succeeded for user: %s", q["username"][0])
+	} else {
+		userMatch := subtle.ConstantTimeCompare([]byte(c.User.String()), []byte(q["username"][0]))
+		passMatch := subtle.ConstantTimeCompare([]byte(c.Password.String()), []byte(q["password"][0]))
+		if userMatch&passMatch != 1 {
+			utils.DebugLog("Local app authentication failed for user: %s", q["username"][0])
+			ctx.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
+	}
 
-    ctx.Request.Body = io.NopCloser(bytes.NewReader(contents))
+	ctx.Request.Body = io.NopCloser(bytes.NewReader(contents))
 }
 
 // ldapAuthenticate binds with an optional service account, finds the user DN,
 // optionally validates group membership, then attempts a user bind.
 func ldapAuthenticate(server, baseDN, bindDN, bindPassword, userAttr, groupAttr, requiredGroup, username, password string) bool {
-    utils.DebugLog("LDAP DialURL: %s", server)
-    l, err := ldap.DialURL(server)
-    if err != nil {
-        utils.DebugLog("LDAP DialURL error: %v", err)
-        return false
-    }
-    defer l.Close()
+	utils.DebugLog("LDAP DialURL: %s", server)
+	l, err := ldap.DialURL(server)
+	if err != nil {
+		utils.DebugLog("LDAP DialURL error: %v", err)
+		return false
+	}
+	defer l.Close()
 
-    // Bind with service account
-    if bindDN != "" && bindPassword != "" {
-        utils.DebugLog("LDAP service bind attempt: DN=%s", bindDN)
-        if err := l.Bind(bindDN, bindPassword); err != nil {
-            utils.DebugLog("LDAP service bind error: %v", err)
-            return false
-        }
-        utils.DebugLog("LDAP service bind succeeded")
-    }
+	// Bind with service account
+	if bindDN != "" && bindPassword != "" {
+		utils.DebugLog("LDAP service bind attempt: DN=%s", bindDN)
+		if err := l.Bind(bindDN, bindPassword); err != nil {
+			utils.DebugLog("LDAP service bind error: %v", err)
+			return false
+		}
+		utils.DebugLog("LDAP service bind succeeded")
+	}
 
-    // Search for user DN
-    filter := fmt.Sprintf("(%s=%s)", userAttr, ldap.EscapeFilter(username))
-    utils.DebugLog("LDAP search: baseDN=%s, filter=%s", baseDN, filter)
-    searchRequest := ldap.NewSearchRequest(
-        baseDN,
-        ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, 0, false,
-        filter,
-        []string{"dn", groupAttr}, // Include group attribute
-        nil,
-    )
-    sr, err := l.Search(searchRequest)
-    if err != nil {
-        utils.DebugLog("LDAP search error: %v", err)
-        return false
-    }
-    if len(sr.Entries) == 0 {
-        utils.DebugLog("LDAP search: no entries found for user: %s", username)
-        return false
-    }
-    userDN := sr.Entries[0].DN
-    utils.DebugLog("LDAP user DN found: %s", userDN)
+	// Search for user DN
+	filter := fmt.Sprintf("(%s=%s)", userAttr, ldap.EscapeFilter(username))
+	utils.DebugLog("LDAP search: baseDN=%s, filter=%s", baseDN, filter)
+	searchRequest := ldap.NewSearchRequest(
+		baseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 1, 0, false,
+		filter,
+		[]string{"dn", groupAttr}, // Include group attribute
+		nil,
+	)
+	sr, err := l.Search(searchRequest)
+	if err != nil {
+		utils.DebugLog("LDAP search error: %v", err)
+		return false
+	}
+	if len(sr.Entries) == 0 {
+		utils.DebugLog("LDAP search: no entries found for user: %s", username)
+		return false
+	}
+	userDN := sr.Entries[0].DN
+	utils.DebugLog("LDAP user DN found: %s", userDN)
 
-    // Check group membership if requiredGroup is specified
-    if requiredGroup != "" && groupAttr != "" {
-        hasGroup := false
-        for _, entry := range sr.Entries {
-            for _, groupValue := range entry.GetAttributeValues(groupAttr) {
-                utils.DebugLog("LDAP user group: %s", groupValue)
-                if ldapGroupMatches(groupValue, requiredGroup) {
-                    hasGroup = true
-                    break
-                }
-            }
-        }
-        if !hasGroup {
-            utils.DebugLog("LDAP user %s is not a member of required group: %s", username, requiredGroup)
-            return false
-        }
-        utils.DebugLog("LDAP user %s is a member of required group: %s", username, requiredGroup)
-    }
+	// Check group membership if requiredGroup is specified
+	if requiredGroup != "" && groupAttr != "" {
+		hasGroup := false
+		for _, entry := range sr.Entries {
+			for _, groupValue := range entry.GetAttributeValues(groupAttr) {
+				utils.DebugLog("LDAP user group: %s", groupValue)
+				if ldapGroupMatches(groupValue, requiredGroup) {
+					hasGroup = true
+					break
+				}
+			}
+		}
+		if !hasGroup {
+			utils.DebugLog("LDAP user %s is not a member of required group: %s", username, requiredGroup)
+			return false
+		}
+		utils.DebugLog("LDAP user %s is a member of required group: %s", username, requiredGroup)
+	}
 
-    // Try to bind as user
-    utils.DebugLog("LDAP user bind attempt: DN=%s", userDN)
-    if err := l.Bind(userDN, password); err != nil {
-        utils.DebugLog("LDAP user bind error: %v", err)
-        return false
-    }
-    utils.DebugLog("LDAP user bind succeeded for user: %s", username)
-    return true
+	// Try to bind as user
+	utils.DebugLog("LDAP user bind attempt: DN=%s", userDN)
+	if err := l.Bind(userDN, password); err != nil {
+		utils.DebugLog("LDAP user bind error: %v", err)
+		return false
+	}
+	utils.DebugLog("LDAP user bind succeeded for user: %s", username)
+	return true
 }
 
 // ldapGroupMatches reports whether groupValue (which may be a DN like
@@ -267,12 +267,12 @@ func ldapAuthenticate(server, baseDN, bindDN, bindPassword, userAttr, groupAttr,
 // (case-insensitive). This replaces a substring match that would accept "notiptv"
 // when requiredGroup is "iptv".
 func ldapGroupMatches(groupValue, requiredGroup string) bool {
-    lower := strings.ToLower(groupValue)
-    prefix := "cn=" + strings.ToLower(requiredGroup)
-    // DN form: must start with "cn=<group>," or equal "cn=<group>"
-    if strings.HasPrefix(lower, "cn=") {
-        return strings.HasPrefix(lower, prefix+",") || lower == prefix
-    }
-    // Plain name: exact case-insensitive equality
-    return lower == strings.ToLower(requiredGroup)
+	lower := strings.ToLower(groupValue)
+	prefix := "cn=" + strings.ToLower(requiredGroup)
+	// DN form: must start with "cn=<group>," or equal "cn=<group>"
+	if strings.HasPrefix(lower, "cn=") {
+		return strings.HasPrefix(lower, prefix+",") || lower == prefix
+	}
+	// Plain name: exact case-insensitive equality
+	return lower == strings.ToLower(requiredGroup)
 }

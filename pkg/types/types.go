@@ -54,7 +54,7 @@ type StreamSession struct {
 func (s *StreamSession) AddViewer(username string) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	
+
 	s.Viewers[username] = time.Now()
 	s.LastRequested = time.Now()
 }
@@ -63,9 +63,9 @@ func (s *StreamSession) AddViewer(username string) {
 func (s *StreamSession) RemoveViewer(username string) bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	
+
 	delete(s.Viewers, username)
-	
+
 	// Return whether the stream still has viewers
 	return len(s.Viewers) > 0
 }
@@ -74,13 +74,13 @@ func (s *StreamSession) RemoveViewer(username string) bool {
 func (s *StreamSession) GetViewers() map[string]time.Time {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
-	
+
 	// Create a copy of the viewers map to avoid race conditions
 	viewers := make(map[string]time.Time, len(s.Viewers))
 	for k, v := range s.Viewers {
 		viewers[k] = v
 	}
-	
+
 	return viewers
 }
 
@@ -91,7 +91,7 @@ type VODRequest struct {
 	Results   []VODResult
 	CreatedAt time.Time
 	ExpiresAt time.Time
-	Token     string  // Unique token for this request
+	Token     string // Unique token for this request
 }
 
 // VODResult represents a single VOD search result
@@ -109,10 +109,10 @@ type VODResult struct {
 	// Type of result: "movie" or "series"
 	StreamType string
 	// Series metadata when StreamType is "series"
-	SeriesTitle   string
-	Season        int
-	Episode       int
-	EpisodeTitle  string
+	SeriesTitle  string
+	Season       int
+	Episode      int
+	EpisodeTitle string
 }
 
 // TemporaryLink represents a generated temporary download link
@@ -135,20 +135,20 @@ type APIResponse struct {
 
 // VODCacheEntry tracks cached VOD or series episode stored on disk
 type VODCacheEntry struct {
-	StreamID    string    `json:"stream_id"`
-	Type        string    `json:"type"` // movie or series
-	Title       string    `json:"title,omitempty"`
-	SeriesTitle string    `json:"series_title,omitempty"`
-	Season      int       `json:"season,omitempty"`
-	Episode     int       `json:"episode,omitempty"`
-	FilePath    string    `json:"file_path"`
-	RequestedBy string    `json:"requested_by,omitempty"`
+	StreamID    string `json:"stream_id"`
+	Type        string `json:"type"` // movie or series
+	Title       string `json:"title,omitempty"`
+	SeriesTitle string `json:"series_title,omitempty"`
+	Season      int    `json:"season,omitempty"`
+	Episode     int    `json:"episode,omitempty"`
+	FilePath    string `json:"file_path"`
+	RequestedBy string `json:"requested_by,omitempty"`
 	// Live progress
 	DownloadedBytes int64     `json:"downloaded_bytes,omitempty"`
 	TotalBytes      int64     `json:"total_bytes,omitempty"`
-	SizeBytes   int64     `json:"size_bytes,omitempty"`
-	Status      string    `json:"status"` // downloading, ready, failed
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	LastAccess  time.Time `json:"last_access,omitempty"`
+	SizeBytes       int64     `json:"size_bytes,omitempty"`
+	Status          string    `json:"status"` // downloading, ready, failed
+	CreatedAt       time.Time `json:"created_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	LastAccess      time.Time `json:"last_access,omitempty"`
 }

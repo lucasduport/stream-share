@@ -15,8 +15,8 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
- package utils
+
+package utils
 
 import (
 	"fmt"
@@ -54,7 +54,7 @@ const (
 func init() {
 	// Initialize logging configuration from environment
 	Config.DebugLoggingEnabled = os.Getenv("LOG_DEBUG_ENABLED") == "true"
-	
+
 	// Set log level from environment
 	logLevel := strings.ToLower(os.Getenv("LOG_LEVEL"))
 	switch logLevel {
@@ -73,19 +73,19 @@ func init() {
 			Config.LogLevel = LevelInfo
 		}
 	}
-	
+
 	// Configure file logging if requested
 	logFilePath := os.Getenv("LOG_FILE")
 	if logFilePath != "" {
 		Config.LogToFile = true
 		Config.LogFilePath = logFilePath
-		
+
 		// Create log directory if it doesn't exist
 		logDir := filepath.Dir(logFilePath)
 		if err := os.MkdirAll(logDir, 0755); err != nil {
 			log.Printf("Error creating log directory: %v", err)
 		}
-		
+
 		// Open log file
 		file, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
@@ -95,9 +95,9 @@ func init() {
 			log.SetOutput(file)
 		}
 	}
-	
+
 	// Log initial configuration
-	InfoLog("Logging initialized - Debug: %v, Level: %s", 
+	InfoLog("Logging initialized - Debug: %v, Level: %s",
 		Config.DebugLoggingEnabled, levelToString(Config.LogLevel))
 }
 
@@ -145,16 +145,16 @@ func logWithCaller(level LogLevel, format string, v ...interface{}) {
 		// Get just the filename without the path
 		caller = fmt.Sprintf("%s:%d", filepath.Base(file), line)
 	}
-	
+
 	// Format message with timestamp and level
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	levelStr := levelToString(level)
-	
+
 	// Format the final message
 	message := fmt.Sprintf(format, v...)
-	logMessage := fmt.Sprintf("%s [%s] (%s) %s", 
+	logMessage := fmt.Sprintf("%s [%s] (%s) %s",
 		timestamp, levelStr, caller, message)
-	
+
 	// Log to standard output
 	log.Println(logMessage)
 }

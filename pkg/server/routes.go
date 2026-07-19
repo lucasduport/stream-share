@@ -31,7 +31,7 @@ import (
 func (c *Config) routes(r *gin.RouterGroup) {
 	r = r.Group(c.CustomEndpoint)
 
-	//Xtream service endopoints
+	// Xtream service endpoints
 	if c.XtreamBaseURL != "" {
 		c.xtreamRoutes(r)
 		if strings.Contains(c.XtreamBaseURL, c.RemoteURL.Host) &&

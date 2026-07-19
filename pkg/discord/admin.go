@@ -19,44 +19,59 @@
 package discord
 
 import (
-    "fmt"
-    "net/url"
+	"fmt"
+	"net/url"
 
-    "github.com/bwmarrin/discordgo"
+	"github.com/bwmarrin/discordgo"
 )
 
 func (b *Bot) isAdmin(member *discordgo.Member) bool {
-    if b.adminRoleID == "" {
-        return true // no admin role configured — allow anyone (backwards compat)
-    }
-    if member == nil {
-        return false
-    }
-    for _, r := range member.Roles {
-        if r == b.adminRoleID {
-            return true
-        }
-    }
-    return false
+	if b.adminRoleID == "" {
+		return true // no admin role configured — allow anyone (backwards compat)
+	}
+	if member == nil {
+		return false
+	}
+	for _, r := range member.Roles {
+		if r == b.adminRoleID {
+			return true
+		}
+	}
+	return false
 }
 
 // handleDisconnect forcibly disconnects a user (admin only).
 func (b *Bot) handleDisconnect(s *discordgo.Session, m *discordgo.MessageCreate, args []string) {
-    if len(args) != 1 { b.info(m.ChannelID, "🔌 Disconnect User", "Usage: `!disconnect <username>`"); return }
-    username := args[0]
-    ok, _, err := b.makeAPIRequest("POST", "/users/disconnect/"+url.PathEscape(username), nil)
-    if err != nil || !ok { b.fail(m.ChannelID, "❌ Disconnect Failed", fmt.Sprintf("We couldn't disconnect this user.\n\nError: `%v`", err)); return }
-    b.success(m.ChannelID, "✅ User Disconnected", fmt.Sprintf("User **%s** has been disconnected.", username))
+	if len(args) != 1 {
+		b.info(m.ChannelID, "🔌 Disconnect User", "Usage: `!disconnect <username>`")
+		return
+	}
+	username := args[0]
+	ok, _, err := b.makeAPIRequest("POST", "/users/disconnect/"+url.PathEscape(username), nil)
+	if err != nil || !ok {
+		b.fail(m.ChannelID, "❌ Disconnect Failed", fmt.Sprintf("We couldn't disconnect this user.\n\nError: `%v`", err))
+		return
+	}
+	b.success(m.ChannelID, "✅ User Disconnected", fmt.Sprintf("User **%s** has been disconnected.", username))
 }
 
 // handleTimeout temporarily blocks a user (admin only).
 func (b *Bot) handleTimeout(s *discordgo.Session, m *discordgo.MessageCreate, args []string) {
-    if len(args) != 2 { b.info(m.ChannelID, "⏳ Timeout User", "Usage: `!timeout <username> <minutes>`"); return }
-    username := args[0]
-    minutes := 0
-    _, _ = fmt.Sscanf(args[1], "%d", &minutes)
-    if minutes <= 0 { b.warn(m.ChannelID, "⏳ Invalid Timeout", "Timeout minutes must be a positive number."); return }
-    ok, _, err := b.makeAPIRequest("POST", "/users/timeout/"+url.PathEscape(username), map[string]int{"minutes": minutes})
-    if err != nil || !ok { b.fail(m.ChannelID, "❌ Timeout Failed", fmt.Sprintf("We couldn't set a timeout for this user.\n\nError: `%v`", err)); return }
-    b.success(m.ChannelID, "✅ Timeout Applied", fmt.Sprintf("User **%s** has been timed out for **%d** minutes.", username, minutes))
+	if len(args) != 2 {
+		b.info(m.ChannelID, "⏳ Timeout User", "Usage: `!timeout <username> <minutes>`")
+		return
+	}
+	username := args[0]
+	minutes := 0
+	_, _ = fmt.Sscanf(args[1], "%d", &minutes)
+	if minutes <= 0 {
+		b.warn(m.ChannelID, "⏳ Invalid Timeout", "Timeout minutes must be a positive number.")
+		return
+	}
+	ok, _, err := b.makeAPIRequest("POST", "/users/timeout/"+url.PathEscape(username), map[string]int{"minutes": minutes})
+	if err != nil || !ok {
+		b.fail(m.ChannelID, "❌ Timeout Failed", fmt.Sprintf("We couldn't set a timeout for this user.\n\nError: `%v`", err))
+		return
+	}
+	b.success(m.ChannelID, "✅ Timeout Applied", fmt.Sprintf("User **%s** has been timed out for **%d** minutes.", username, minutes))
 }

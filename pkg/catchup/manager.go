@@ -37,9 +37,9 @@ type Manager struct {
 	duration int // hours — controls both advertised window and disk retention
 
 	mu              sync.Mutex
-	buffers         map[string]*DiskBuffer // streamID → buffer (active or in grace period)
+	buffers         map[string]*DiskBuffer   // streamID → buffer (active or in grace period)
 	graceCancels    map[string]chan struct{} // streamID → cancel chan for grace goroutine
-	upstreamCatchup map[string]bool         // streamID → has native tv_archive=1
+	upstreamCatchup map[string]bool          // streamID → has native tv_archive=1
 }
 
 // New creates a Manager. If !enabled, all methods are no-ops.

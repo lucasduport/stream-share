@@ -15,50 +15,49 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 package discord
 
 import (
-    "net/http"
-    "sync"
-    "time"
+	"net/http"
+	"sync"
+	"time"
 
-    "github.com/bwmarrin/discordgo"
-    "github.com/lucasduport/stream-share/pkg/types"
+	"github.com/bwmarrin/discordgo"
+	"github.com/lucasduport/stream-share/pkg/types"
 )
 
 // Bot represents the Discord bot and its stateful maps for interactive flows.
 type Bot struct {
-    session         *discordgo.Session
-    token           string
-    adminRoleID     string
-    apiURL          string
-    apiKey          string
-    client          *http.Client // short timeout (10s) for quick API calls
-    slowClient      *http.Client // long timeout (90s) for catalogue-scanning endpoints
+	session     *discordgo.Session
+	token       string
+	adminRoleID string
+	apiURL      string
+	apiKey      string
+	client      *http.Client // short timeout (10s) for quick API calls
+	slowClient  *http.Client // long timeout (90s) for catalogue-scanning endpoints
 
-    cleanupInterval time.Duration
-    stopChan        chan struct{} // closed by Stop() to terminate background goroutines
+	cleanupInterval time.Duration
+	stopChan        chan struct{} // closed by Stop() to terminate background goroutines
 
-    // Component-based selection contexts
-    pendingVODSelect map[string]*vodSelectContext // messageID -> selection context
-    selectLock       sync.RWMutex
+	// Component-based selection contexts
+	pendingVODSelect map[string]*vodSelectContext // messageID -> selection context
+	selectLock       sync.RWMutex
 
-    // Slash commands
-    devGuildID        string
-    registeredCommands []*discordgo.ApplicationCommand
+	// Slash commands
+	devGuildID         string
+	registeredCommands []*discordgo.ApplicationCommand
 }
-
 
 // Context for component-based VOD selection (dropdown + buttons)
 type vodSelectContext struct {
-    UserID  string
-    Channel string
-    Query   string
-    Results []types.VODResult
-    Page    int
-    PerPage int
-    Created time.Time
-    // Tracks which pages have been enriched (full name, rating, size) to avoid redundant refreshes
-    EnrichedPages map[int]bool
+	UserID  string
+	Channel string
+	Query   string
+	Results []types.VODResult
+	Page    int
+	PerPage int
+	Created time.Time
+	// Tracks which pages have been enriched (full name, rating, size) to avoid redundant refreshes
+	EnrichedPages map[int]bool
 }

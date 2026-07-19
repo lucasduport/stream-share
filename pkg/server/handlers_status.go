@@ -91,7 +91,7 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 	allSessions := c.sessionManager.GetAllSessions()
 	activeUserSet := make(map[string]struct{}, len(allSessions))
 	for _, us := range allSessions {
-	if us.StreamID != "" {
+		if us.StreamID != "" {
 			activeUserSet[us.Username] = struct{}{}
 		}
 	}

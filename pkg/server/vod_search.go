@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 package server
 
 import (
@@ -28,12 +28,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"regexp"
 
 	"github.com/lucasduport/stream-share/pkg/types"
 	"github.com/lucasduport/stream-share/pkg/utils"
@@ -80,14 +80,24 @@ func (c *Config) searchXtreamVOD(query string) ([]types.VODResult, error) {
 	results := make([]types.VODResult, 0, 50)
 	// Movies via API
 	if movies, err := c.searchXtreamMovies(query); err == nil && len(movies) > 0 {
-		utils.DebugLog("VOD search: movie API results: %d (first: %s)", len(movies), func() string { if len(movies)>0 { return movies[0].Title }; return "" }())
+		utils.DebugLog("VOD search: movie API results: %d (first: %s)", len(movies), func() string {
+			if len(movies) > 0 {
+				return movies[0].Title
+			}
+			return ""
+		}())
 		results = append(results, movies...)
 	} else if err != nil {
 		utils.WarnLog("VOD search: movie API search error: %v", err)
 	}
 	// Series via API
 	if seriesResults, err := c.searchXtreamSeries(query); err == nil && len(seriesResults) > 0 {
-		utils.DebugLog("VOD search: series API results: %d (first: %s)", len(seriesResults), func() string { if len(seriesResults)>0 { return seriesResults[0].Title }; return "" }())
+		utils.DebugLog("VOD search: series API results: %d (first: %s)", len(seriesResults), func() string {
+			if len(seriesResults) > 0 {
+				return seriesResults[0].Title
+			}
+			return ""
+		}())
 		results = append(results, seriesResults...)
 	} else if err != nil {
 		utils.WarnLog("VOD search: series API search error: %v", err)
@@ -121,31 +131,47 @@ func (c *Config) searchXtreamVOD(query string) ([]types.VODResult, error) {
 // searchXtreamMovies queries the Xtream API for VOD movies and filters by tokens.
 func (c *Config) searchXtreamMovies(query string) ([]types.VODResult, error) {
 	q := strings.TrimSpace(query)
-	if q == "" { return nil, nil }
+	if q == "" {
+		return nil, nil
+	}
 	tokens, _, _ := parseQueryTokens(q) // season/episode tokens ignored for movies
 	utils.DebugLog("Movies search: using Xtream client (baseURL=%s, user=%s)", c.XtreamBaseURL, utils.MaskString(c.XtreamUser.String()))
 	cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_vod_streams", url.Values{})
 	if err != nil {
 		utils.WarnLog("Movies search: get_vod_streams failed (HTTP %d, CT=%s): %v", httpcode, contentType, err)
 		return nil, err
 	}
 	arr, ok := resp.([]interface{})
-	if !ok { return nil, fmt.Errorf("unexpected get_vod_streams format: %T", resp) }
+	if !ok {
+		return nil, fmt.Errorf("unexpected get_vod_streams format: %T", resp)
+	}
 	out := make([]types.VODResult, 0, 50)
 	for _, it := range arr {
 		m, ok := it.(map[string]interface{})
-		if !ok { continue }
+		if !ok {
+			continue
+		}
 		name := fmt.Sprintf("%v", m["name"]) // movie title
-		if name == "" { continue }
-		if !allTokensIn(tokens, name) { continue }
+		if name == "" {
+			continue
+		}
+		if !allTokensIn(tokens, name) {
+			continue
+		}
 		streamID := fmt.Sprintf("%v", m["stream_id"]) // numeric as string
-		if strings.TrimSpace(streamID) == "" || streamID == "<nil>" { continue }
+		if strings.TrimSpace(streamID) == "" || streamID == "<nil>" {
+			continue
+		}
 		year := fmt.Sprintf("%v", firstNonEmpty(m["releaseDate"], m["release_date"]))
 		rating := fmt.Sprintf("%v", firstNonEmpty(m["rating"], m["vote_average"]))
-	duration := fmt.Sprintf("%v", m["duration"]) // may be empty; providers sometimes return null -> "<nil>"
-	if duration == "<nil>" { duration = "" }
+		duration := fmt.Sprintf("%v", m["duration"]) // may be empty; providers sometimes return null -> "<nil>"
+		if duration == "<nil>" {
+			duration = ""
+		}
 		category := fmt.Sprintf("%v", m["category_name"]) // best-effort; some providers only give category_id
 
 		out = append(out, types.VODResult{
@@ -183,7 +209,9 @@ func dedupeVODResults(in []types.VODResult) []types.VODResult {
 		}
 	}
 	out := make([]types.VODResult, 0, len(best))
-	for _, k := range order { out = append(out, best[k]) }
+	for _, k := range order {
+		out = append(out, best[k])
+	}
 	return out
 }
 
@@ -194,18 +222,32 @@ func isRicher(a, b types.VODResult) bool {
 		return a.SeriesTitle != "" && a.Episode > 0
 	}
 	// Prefer explicit EpisodeTitle
-	if (a.EpisodeTitle != "") != (b.EpisodeTitle != "") { return a.EpisodeTitle != "" }
+	if (a.EpisodeTitle != "") != (b.EpisodeTitle != "") {
+		return a.EpisodeTitle != ""
+	}
 	// Prefer having rating
-	if (a.Rating != "") != (b.Rating != "") { return a.Rating != "" }
+	if (a.Rating != "") != (b.Rating != "") {
+		return a.Rating != ""
+	}
 	// Prefer having size info
-	if (a.SizeBytes > 0) != (b.SizeBytes > 0) { return a.SizeBytes > 0 }
-	if (a.Size != "") != (b.Size != "") { return a.Size != "" }
+	if (a.SizeBytes > 0) != (b.SizeBytes > 0) {
+		return a.SizeBytes > 0
+	}
+	if (a.Size != "") != (b.Size != "") {
+		return a.Size != ""
+	}
 	// Prefer having duration
-	if (a.Duration != "") != (b.Duration != "") { return a.Duration != "" }
+	if (a.Duration != "") != (b.Duration != "") {
+		return a.Duration != ""
+	}
 	// Prefer year
-	if (a.Year != "") != (b.Year != "") { return a.Year != "" }
+	if (a.Year != "") != (b.Year != "") {
+		return a.Year != ""
+	}
 	// Prefer longer title (likely includes episode name)
-	if len(a.Title) != len(b.Title) { return len(a.Title) > len(b.Title) }
+	if len(a.Title) != len(b.Title) {
+		return len(a.Title) > len(b.Title)
+	}
 	// Otherwise keep current
 	return false
 }
@@ -244,7 +286,9 @@ func (c *Config) ensureVODM3UCache() (string, error) {
 	}
 
 	// No cache present: fetch synchronously
-	if err := c.refreshVODM3U(cacheFile); err != nil { return "", err }
+	if err := c.refreshVODM3U(cacheFile); err != nil {
+		return "", err
+	}
 	return cacheFile, nil
 }
 
@@ -254,18 +298,28 @@ func (c *Config) refreshVODM3U(cacheFile string) error {
 		c.XtreamBaseURL, c.XtreamUser.String(), c.XtreamPassword.String())
 	utils.InfoLog("Refreshing VOD M3U from Xtream: %s", utils.MaskURL(getURL))
 	req, err := http.NewRequest("GET", getURL, nil)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 	// Short timeout for refresh to avoid tying resources
 	client := &http.Client{Timeout: 6 * time.Second}
 	resp, err := client.Do(req)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 { return fmt.Errorf("backend returned %d for M3U request", resp.StatusCode) }
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("backend returned %d for M3U request", resp.StatusCode)
+	}
 	f, err := os.Create(cacheFile)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(f, resp.Body); err != nil { return err }
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return err
+	}
 	utils.InfoLog("Stored VOD M3U to %s", cacheFile)
 	return nil
 }
@@ -273,30 +327,46 @@ func (c *Config) refreshVODM3U(cacheFile string) error {
 // parseVODM3UExtensions scans the cached VOD M3U once and builds a map of streamID -> extension.
 func parseVODM3UExtensions(m3uPath string) (map[string]string, error) {
 	f, err := os.Open(m3uPath)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
 	idx := make(map[string]string, 4096)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") { continue }
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") { continue }
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			continue
+		}
 		u, err := url.Parse(line)
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		// Movie/series entries embed streamID possibly with extension as last path segment
 		last := path.Base(u.Path)
-		if last == "" { continue }
+		if last == "" {
+			continue
+		}
 		id := last
 		ext := path.Ext(last)
-		if ext != "" { id = strings.TrimSuffix(last, ext) }
-		if id == "" { continue }
+		if ext != "" {
+			id = strings.TrimSuffix(last, ext)
+		}
+		if id == "" {
+			continue
+		}
 		if ext != "" {
 			if _, exists := idx[id]; !exists {
 				idx[id] = ext
 			}
 		}
 	}
-	if err := sc.Err(); err != nil { return idx, err }
+	if err := sc.Err(); err != nil {
+		return idx, err
+	}
 	return idx, nil
 }
 
@@ -316,23 +386,33 @@ func parseInt64(s string) (int64, error) {
 // Returns lowercase tokens and season/episode numbers (0 if missing). Season/Episode tokens are removed from tokens.
 func parseQueryTokens(q string) (tokens []string, season, episode int) {
 	s := strings.TrimSpace(strings.ToLower(q))
-	if s == "" { return nil, 0, 0 }
+	if s == "" {
+		return nil, 0, 0
+	}
 	// Find sXXeYY combined
 	if m := reSECombined.FindStringSubmatch(s); m != nil {
-		if v, err := strconv.Atoi(m[1]); err == nil { season = v }
-		if v, err := strconv.Atoi(m[2]); err == nil { episode = v }
+		if v, err := strconv.Atoi(m[1]); err == nil {
+			season = v
+		}
+		if v, err := strconv.Atoi(m[2]); err == nil {
+			episode = v
+		}
 		s = strings.ReplaceAll(s, m[0], " ")
 	}
 	// Separate sXX and eYY
 	if season == 0 {
 		if m := reSeason.FindStringSubmatch(s); m != nil {
-			if v, err := strconv.Atoi(m[1]); err == nil { season = v }
+			if v, err := strconv.Atoi(m[1]); err == nil {
+				season = v
+			}
 			s = strings.ReplaceAll(s, m[0], " ")
 		}
 	}
 	if episode == 0 {
 		if m := reEpisode.FindStringSubmatch(s); m != nil {
-			if v, err := strconv.Atoi(m[1]); err == nil { episode = v }
+			if v, err := strconv.Atoi(m[1]); err == nil {
+				episode = v
+			}
 			s = strings.ReplaceAll(s, m[0], " ")
 		}
 	}
@@ -342,10 +422,14 @@ func parseQueryTokens(q string) (tokens []string, season, episode int) {
 
 // allTokensIn checks that all tokens are contained in the haystack string (case-insensitive).
 func allTokensIn(tokens []string, hay string) bool {
-	if len(tokens) == 0 { return true }
+	if len(tokens) == 0 {
+		return true
+	}
 	h := strings.ToLower(hay)
 	for _, t := range tokens {
-		if !strings.Contains(h, t) { return false }
+		if !strings.Contains(h, t) {
+			return false
+		}
 	}
 	return true
 }
@@ -388,7 +472,9 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 			continue
 		}
 		// Only require non-season tokens to be in the series name
-		if !allTokensIn(qTokens, seriesName) { continue }
+		if !allTokensIn(qTokens, seriesName) {
+			continue
+		}
 		seriesID := fmt.Sprintf("%v", m["series_id"])
 		if seriesID == "" || seriesID == "<nil>" {
 			continue
@@ -413,8 +499,8 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 			// Some providers use episodes as array with season inside
 			continue
 		}
-	totalEps := 0
-	for seasonStr, epsV := range epsBySeason {
+		totalEps := 0
+		for seasonStr, epsV := range epsBySeason {
 			seasonNum, _ := strconv.Atoi(seasonStr)
 			eps, ok := epsV.([]interface{})
 			if !ok {
@@ -427,15 +513,21 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 				}
 				title := fmt.Sprintf("%v", em["title"])
 				// Apply token AND match on either episode title or series name
-				if len(qTokens) > 0 && !allTokensIn(qTokens, title) && !allTokensIn(qTokens, seriesName) { continue }
+				if len(qTokens) > 0 && !allTokensIn(qTokens, title) && !allTokensIn(qTokens, seriesName) {
+					continue
+				}
 				streamID := fmt.Sprintf("%v", firstNonEmpty(em["id"], em["stream_id"]))
 				if streamID == "" || streamID == "<nil>" {
 					continue
 				}
 				epNum := toInt(em["episode_num"]) // best-effort
 				// Enforce numeric season/episode if specified
-				if qSeason > 0 && seasonNum != qSeason { continue }
-				if qEpisode > 0 && epNum != qEpisode { continue }
+				if qSeason > 0 && seasonNum != qSeason {
+					continue
+				}
+				if qEpisode > 0 && epNum != qEpisode {
+					continue
+				}
 				// info subobject for duration/rating
 				var duration, rating string
 				if infoSub, ok := em["info"].(map[string]interface{}); ok {
@@ -443,7 +535,7 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 					rating = fmt.Sprintf("%v", firstNonEmpty(infoSub["rating"], infoSub["vote_average"]))
 				}
 
-		out = append(out, types.VODResult{
+				out = append(out, types.VODResult{
 					ID:           streamID,
 					Title:        fmt.Sprintf("%s S%02dE%02d — %s", seriesName, seasonNum, epNum, title),
 					Category:     genre,
@@ -457,14 +549,15 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 					Episode:      epNum,
 					EpisodeTitle: title,
 				})
-		totalEps++
+				totalEps++
 			}
 		}
-	utils.DebugLog("Series search: '%s' yielded %d episode entries after filtering", seriesName, totalEps)
+		utils.DebugLog("Series search: '%s' yielded %d episode entries after filtering", seriesName, totalEps)
 	}
 	utils.DebugLog("Series search: returning %d results", len(out))
 	return out, nil
 }
+
 // firstNonEmpty returns the first non-empty/non-nil value among candidates
 func firstNonEmpty(values ...interface{}) interface{} {
 	for _, v := range values {

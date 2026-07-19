@@ -206,7 +206,9 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		apiURL := config.DiscordAPIURL
 		if apiURL == "" {
 			protocol := "http"
-			if config.HTTPS { protocol = "https" }
+			if config.HTTPS {
+				protocol = "https"
+			}
 			hostPart := fmt.Sprintf("%s:%d", config.HostConfig.Hostname, config.HostConfig.Port)
 			if config.ReverseProxyEnabled {
 				// Behind reverse proxy: use hostname without port by default
@@ -260,16 +262,16 @@ func cleanDebugAPIFiles(cacheDir string) {
 	}
 }
 
-// Serve the stream-share api
 // Serve boots the HTTP server, internal API, routes, and optional Discord bot.
 func (c *Config) Serve() error {
 	utils.InfoLog("[stream-share] Server is starting...")
 
-	if c.db != nil && c.db.IsInitialized() {
+	switch {
+	case c.db != nil && c.db.IsInitialized():
 		utils.InfoLog("Bootstrap: Database is initialized and connected")
-	} else if c.db != nil {
+	case c.db != nil:
 		utils.WarnLog("Bootstrap: Database manager present but not initialized")
-	} else {
+	default:
 		utils.WarnLog("Bootstrap: Database is DISABLED (no persistence)")
 	}
 
@@ -427,10 +429,22 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 		idRaw := strings.TrimSuffix(tempLink.StreamID, path.Ext(tempLink.StreamID))
 		if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil && entry.Status == "ready" {
 			utils.InfoLog("Download via cache for %s -> %s", c.vodLabel(tempLink.StreamID), entry.FilePath)
-			ext := strings.ToLower(path.Ext(entry.FilePath)); if ext == "" { ext = ".mp4" }
+			ext := strings.ToLower(path.Ext(entry.FilePath))
+			if ext == "" {
+				ext = ".mp4"
+			}
 			_ = c.db.TouchVODCache(idRaw)
 			var ct string
-			switch ext { case ".ts": ct = "video/mp2t"; case ".mkv": ct = "video/x-matroska"; case ".mp4": ct = "video/mp4"; default: ct = "application/octet-stream" }
+			switch ext {
+			case ".ts":
+				ct = "video/mp2t"
+			case ".mkv":
+				ct = "video/x-matroska"
+			case ".mp4":
+				ct = "video/mp4"
+			default:
+				ct = "application/octet-stream"
+			}
 			serveLocalFileRange(ctx, entry.FilePath, ct, sanitiseFilename(tempLink.Title)+ext, true)
 			return
 		}
@@ -438,8 +452,15 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 
 	// Fallback: proxy upstream URL
 	targetURL, err := url.Parse(tempLink.URL)
-	if err != nil { utils.ErrorLog("Invalid URL in temporary link: %v", err); ctx.AbortWithStatus(http.StatusInternalServerError); return }
-	ext := strings.ToLower(path.Ext(targetURL.Path)); if ext == "" { ext = ".mp4" }
+	if err != nil {
+		utils.ErrorLog("Invalid URL in temporary link: %v", err)
+		ctx.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	ext := strings.ToLower(path.Ext(targetURL.Path))
+	if ext == "" {
+		ext = ".mp4"
+	}
 	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s%s"`, sanitiseFilename(tempLink.Title), ext))
 	c.stream(ctx, targetURL)
 }
@@ -467,6 +488,24 @@ func (c *Config) resolveRequestUsername(ctx *gin.Context) string {
 // multiplexedStream handles streaming with connection multiplexing
 // multiplexedStream proxies a stream while sharing a single upstream connection
 // across multiple clients for the same content using the SessionManager.
+// classifyStreamType infers the Xtream stream type ("movie", "series", "live",
+// "timeshift") from the segments of a URL path, returning fallback when none of
+// the known segments are present.
+func classifyStreamType(p, fallback string) string {
+	switch {
+	case strings.Contains(p, "/movie/"):
+		return "movie"
+	case strings.Contains(p, "/series/"):
+		return "series"
+	case strings.Contains(p, "/live/"):
+		return "live"
+	case strings.Contains(p, "/timeshift/"):
+		return "timeshift"
+	default:
+		return fallback
+	}
+}
+
 func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	username := c.resolveRequestUsername(ctx)
 
@@ -474,30 +513,11 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	streamID := path.Base(targetURL.Path)
 	// Normalize stream id for cache lookup (strip extension if present)
 	streamIDRaw := strings.TrimSuffix(streamID, path.Ext(streamID))
-	streamType := "unknown"
-	p := targetURL.Path
-	if strings.Contains(p, "/movie/") {
-		streamType = "movie"
-	} else if strings.Contains(p, "/series/") {
-		streamType = "series"
-	} else if strings.Contains(p, "/live/") {
-		streamType = "live"
-	} else if strings.Contains(p, "/timeshift/") {
-		streamType = "timeshift"
-	}
-	// Fallback: check incoming request path for type hints.
-	// The generic /:user/:pass/:id route maps to live streams in Xtream protocol.
+	streamType := classifyStreamType(targetURL.Path, "unknown")
+	// Fallback: check the incoming request path for type hints. The generic
+	// /:user/:pass/:id route maps to live streams in the Xtream protocol.
 	if streamType == "unknown" {
-		reqPath := ctx.Request.URL.Path
-		if strings.Contains(reqPath, "/movie/") {
-			streamType = "movie"
-		} else if strings.Contains(reqPath, "/series/") {
-			streamType = "series"
-		} else if strings.Contains(reqPath, "/live/") {
-			streamType = "live"
-		} else {
-			streamType = "live"
-		}
+		streamType = classifyStreamType(ctx.Request.URL.Path, "live")
 	}
 
 	// Title from query parameter, name resolution (live index or lazy VOD
@@ -523,7 +543,13 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 				utils.InfoLog("Multiplex: serving cached %s for %s from %s", streamType, c.streamLabel(streamIDRaw), entry.FilePath)
 				// Content-Type based on file extension
 				var ct string
-				if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" { ct = "video/mp2t" } else if ext == ".mkv" { ct = "video/x-matroska" } else { ct = "video/mp4" }
+				if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" {
+					ct = "video/mp2t"
+				} else if ext == ".mkv" {
+					ct = "video/x-matroska"
+				} else {
+					ct = "video/mp4"
+				}
 				_ = c.db.TouchVODCache(streamIDRaw)
 				serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
 				return
@@ -625,7 +651,7 @@ func (c *Config) marshallInto(into *os.File, xtream bool) error {
 	for i, track := range c.playlist.Tracks {
 		var buffer bytes.Buffer
 
-		buffer.WriteString("#EXTINF:")                       // nolint: errcheck
+		buffer.WriteString("#EXTINF:") // nolint: errcheck
 		fmt.Fprintf(&buffer, "%d ", track.Length)
 		for i := range track.Tags {
 			if i == len(track.Tags)-1 {

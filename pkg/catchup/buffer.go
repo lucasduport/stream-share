@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	indexSampleInterval = 1 << 20        // sample every 1 MB
-	writeChanCap        = 2048           // ~256 MB slack at 128 KB chunks before drops
+	indexSampleInterval = 1 << 20 // sample every 1 MB
+	writeChanCap        = 2048    // ~256 MB slack at 128 KB chunks before drops
 	rotationGracePeriod = 60 * time.Second
 )
 
@@ -60,9 +60,9 @@ type DiskBuffer struct {
 	streamID string
 	maxBytes int64 // 0 = unlimited
 
-	writeCh   chan []byte  // pump goroutine sends slices here
+	writeCh   chan []byte   // pump goroutine sends slices here
 	drainDone chan struct{} // closed by drainLoop when all writes are flushed to disk
-	stopped   int32        // accessed via atomic
+	stopped   int32         // accessed via atomic
 
 	stoppedMu sync.Mutex
 	stoppedAt time.Time
@@ -212,9 +212,9 @@ func (b *DiskBuffer) Delete() error {
 	return os.Remove(cur)
 }
 
-func (b *DiskBuffer) IsStopped() bool          { return atomic.LoadInt32(&b.stopped) != 0 }
+func (b *DiskBuffer) IsStopped() bool            { return atomic.LoadInt32(&b.stopped) != 0 }
 func (b *DiskBuffer) DrainDone() <-chan struct{} { return b.drainDone }
-func (b *DiskBuffer) StreamID() string          { return b.streamID }
+func (b *DiskBuffer) StreamID() string           { return b.streamID }
 
 func (b *DiskBuffer) StoppedAt() time.Time {
 	b.stoppedMu.Lock()

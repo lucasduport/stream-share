@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 package utils
 
 import (
@@ -26,13 +26,14 @@ import (
 
 // MaskString masks sensitive parts of strings for logging.
 func MaskString(s string) string {
-	if len(s) <= 8 {
-		if len(s) <= 0 {
-			return "[empty]"
-		}
+	switch {
+	case len(s) == 0:
+		return "[empty]"
+	case len(s) <= 8:
 		return s[:1] + "******"
+	default:
+		return s[:4] + "..." + s[len(s)-4:]
 	}
-	return s[:4] + "..." + s[len(s)-4:]
 }
 
 // MaskURL masks sensitive parts of URLs for logging.
