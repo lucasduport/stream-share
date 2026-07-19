@@ -68,12 +68,32 @@ func mustURL(t *testing.T, s string) *url.URL {
 }
 
 // drain reads from a client channel until it closes or done fires, counting bytes.
+//
+// When the stream ends the pump delivers the final chunk to the client's buffered
+// channel and then closes done. A plain select over {ch, done} would pick randomly
+// between the ready data and the closed done, so the last buffered chunk could be
+// dropped and the byte count would come up short. On done (and stop), drain any
+// already-buffered chunks non-blocking before returning so every delivered byte is
+// counted deterministically.
 func drain(sm *SessionManager, streamID, user string, got *int64, stop <-chan struct{}) {
 	ch, ok := sm.GetClientChannel(streamID, user)
 	if !ok {
 		return
 	}
 	done, _ := sm.GetClientDone(streamID, user)
+	drainBuffered := func() {
+		for {
+			select {
+			case data, ok := <-ch:
+				if !ok {
+					return
+				}
+				atomic.AddInt64(got, int64(len(data)))
+			default:
+				return
+			}
+		}
+	}
 	for {
 		select {
 		case data, ok := <-ch:
@@ -82,8 +102,10 @@ func drain(sm *SessionManager, streamID, user string, got *int64, stop <-chan st
 			}
 			atomic.AddInt64(got, int64(len(data)))
 		case <-done:
+			drainBuffered()
 			return
 		case <-stop:
+			drainBuffered()
 			return
 		}
 	}
