@@ -63,6 +63,21 @@ func (b *Bot) commandSpecs() []*discordgo.ApplicationCommand {
             DefaultMemberPermissions: int64Ptr(discordgo.PermissionManageGuild),
         },
         {
+            Name:                     "history",
+            Description:              "Watch history timeline (live + VOD)",
+            DefaultMemberPermissions: int64Ptr(discordgo.PermissionManageGuild),
+            Options: []*discordgo.ApplicationCommandOption{
+                {Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Client to drill into (omit for a global timeline of all clients)", Required: false},
+                {Type: discordgo.ApplicationCommandOptionString, Name: "period", Description: "Time window", Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+                    {Name: "Last 24 hours", Value: "24h"},
+                    {Name: "Last 7 days", Value: "7d"},
+                    {Name: "Last 30 days", Value: "30d"},
+                    {Name: "Last 90 days", Value: "90d"},
+                    {Name: "All time", Value: "all"},
+                }},
+            },
+        },
+        {
             Name:                     "disconnect",
             Description:              "Forcibly disconnect a user",
             DefaultMemberPermissions: int64Ptr(discordgo.PermissionManageGuild),
@@ -196,6 +211,23 @@ func (b *Bot) handleApplicationCommand(s *discordgo.Session, i *discordgo.Intera
         _ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Getting status…"}})
     mc := toMessageCreateFromInteraction(i, "")
         b.handleStatus(s, mc, nil)
+
+    case "history":
+        if !b.isAdmin(i.Member) {
+            _ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+                Type: discordgo.InteractionResponseChannelMessageWithSource,
+                Data: &discordgo.InteractionResponseData{
+                    Flags:   discordgo.MessageFlagsEphemeral,
+                    Content: "You don't have permission to use this command.",
+                },
+            })
+            return
+        }
+        username := optString(i, "username")
+        hours := periodToHours(optString(i, "period"))
+        _ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Fetching history…"}})
+        mc := toMessageCreateFromInteraction(i, "")
+        b.handleHistory(s, mc, username, hours)
 
     case "disconnect":
         if !b.isAdmin(i.Member) {
