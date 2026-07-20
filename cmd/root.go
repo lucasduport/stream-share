@@ -143,6 +143,9 @@ It supports:
 			DiscordBotToken:    viper.GetString("discord-bot-token"),
 			DiscordAdminRoleID: viper.GetString("discord-admin-role-id"),
 			DiscordAPIURL:      viper.GetString("discord-api-url"),
+
+			// Dashboard
+			InstanceName: viper.GetString("instance-name"),
 		}
 
 		// Use port if advertised port is not specified
@@ -233,6 +236,9 @@ func init() {
 	rootCmd.Flags().String("discord-bot-token", "", "Discord bot token (enables the Discord bot when set)")
 	rootCmd.Flags().String("discord-admin-role-id", "", "Discord admin role ID")
 	rootCmd.Flags().String("discord-api-url", "", "Base URL the Discord bot uses to reach this API")
+
+	// Dashboard configuration
+	rootCmd.Flags().String("instance-name", "", "Friendly name for this instance, used to identify it in a multi-instance dashboard (defaults to hostname)")
 
 	// Bind all flags to viper
 	if err := viper.BindPFlags(rootCmd.Flags()); err != nil {

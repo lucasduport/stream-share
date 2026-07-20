@@ -68,6 +68,9 @@ type Config struct {
 	db             *database.DBManager
 	discordBot     *discord.Bot
 
+	// startTime records process start, used to report uptime via the API
+	startTime time.Time
+
 	// inProgressDownloads guards against concurrent duplicate fetchToFile goroutines
 	inProgressDownloads sync.Map
 }
@@ -109,6 +112,7 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		sessionManager:       nil,
 		db:                   nil,
 		discordBot:           nil,
+		startTime:            time.Now(),
 	}
 
 	// Force PostgreSQL initialization (sqlite removed)

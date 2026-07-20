@@ -90,9 +90,14 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 	// Status summary for Discord and dashboards
 	api.GET("/status", c.statusSummary)
 
-	// Watch history endpoints (used by Discord)
+	// Watch history endpoints (used by Discord and dashboards)
 	api.GET("/history", c.getHistoryFeed)
 	api.GET("/history/:username", c.getUserHistory)
+
+	// Dashboard endpoints: instance identity (for multi-instance aggregation)
+	// and aggregate/leaderboard stats
+	api.GET("/instance", c.getInstanceInfo)
+	api.GET("/stats", c.getDashboardStats)
 
 	// Debug endpoint to verify API is working
 	api.GET("/ping", func(ctx *gin.Context) {

@@ -39,9 +39,26 @@ func sinceFromHours(hours int) time.Time {
 	return time.Time{}
 }
 
-// getHistoryFeed GET /api/internal/history?hours=N — a chronological timeline of
-// the most recent watch events across ALL clients (newest first), each annotated
-// with who watched, the channel/VOD name, type and duration.
+// pagingFromQuery reads `limit`/`offset` query params, applying defaultLimit
+// when limit is unset or invalid and capping it at maxLimit.
+func pagingFromQuery(ctx *gin.Context, defaultLimit, maxLimit int) (limit, offset int) {
+	limit = defaultLimit
+	if v, err := strconv.Atoi(ctx.Query("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	if v, err := strconv.Atoi(ctx.Query("offset")); err == nil && v > 0 {
+		offset = v
+	}
+	return limit, offset
+}
+
+// getHistoryFeed GET /api/internal/history?hours=N&limit=N&offset=N — a chronological
+// timeline of watch events across ALL clients (newest first), each annotated with who
+// watched, the channel/VOD name, type and duration. Defaults to the 40 most recent
+// events; pass limit/offset to page through more (dashboards typically want this).
 func (c *Config) getHistoryFeed(ctx *gin.Context) {
 	if c.db == nil {
 		utils.ErrorLog("Database is nil in getHistoryFeed")
@@ -54,9 +71,9 @@ func (c *Config) getHistoryFeed(ctx *gin.Context) {
 
 	hours, _ := strconv.Atoi(ctx.Query("hours"))
 	since := sinceFromHours(hours)
+	limit, offset := pagingFromQuery(ctx, 40, 500)
 
-	const limit = 40
-	entries, err := c.db.GetRecentHistory(since, limit)
+	entries, err := c.db.GetRecentHistory(since, limit, offset)
 	if err != nil {
 		utils.ErrorLog("Failed to get history feed: %v", err)
 		ctx.JSON(http.StatusInternalServerError, types.APIResponse{
@@ -64,6 +81,11 @@ func (c *Config) getHistoryFeed(ctx *gin.Context) {
 			Error:   fmt.Sprintf("Failed to get history feed: %v", err),
 		})
 		return
+	}
+
+	total, err := c.db.CountHistory("", since)
+	if err != nil {
+		utils.WarnLog("Failed to count history feed: %v", err)
 	}
 
 	type item struct {
@@ -101,10 +123,13 @@ func (c *Config) getHistoryFeed(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, types.APIResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"feed":  feedItems,
-			"text":  b.String(),
-			"hours": hours,
-			"count": len(feedItems),
+			"feed":   feedItems,
+			"text":   b.String(),
+			"hours":  hours,
+			"count":  len(feedItems),
+			"total":  total,
+			"limit":  limit,
+			"offset": offset,
 		},
 	})
 }
@@ -144,9 +169,9 @@ func (c *Config) getUserHistory(ctx *gin.Context) {
 
 	hours, _ := strconv.Atoi(ctx.Query("hours"))
 	since := sinceFromHours(hours)
+	limit, offset := pagingFromQuery(ctx, 50, 500)
 
-	const limit = 50
-	entries, err := c.db.GetUserHistory(username, since, limit)
+	entries, err := c.db.GetUserHistory(username, since, limit, offset)
 	if err != nil {
 		utils.ErrorLog("Failed to get user history: %v", err)
 		ctx.JSON(http.StatusInternalServerError, types.APIResponse{
@@ -154,6 +179,11 @@ func (c *Config) getUserHistory(ctx *gin.Context) {
 			Error:   fmt.Sprintf("Failed to get user history: %v", err),
 		})
 		return
+	}
+
+	total, err := c.db.CountHistory(username, since)
+	if err != nil {
+		utils.WarnLog("Failed to count user history: %v", err)
 	}
 
 	type item struct {
@@ -194,6 +224,9 @@ func (c *Config) getUserHistory(ctx *gin.Context) {
 			"text":     b.String(),
 			"hours":    hours,
 			"count":    len(entryItems),
+			"total":    total,
+			"limit":    limit,
+			"offset":   offset,
 		},
 	})
 }

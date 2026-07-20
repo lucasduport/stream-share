@@ -98,4 +98,10 @@ type ProxyConfig struct {
 	DiscordBotToken    string
 	DiscordAdminRoleID string
 	DiscordAPIURL      string
+
+	// Dashboard configuration
+	// InstanceName identifies this deployment when its API data is combined with
+	// other stream-share instances in an external dashboard. Defaults to the
+	// machine hostname when unset.
+	InstanceName string
 }

@@ -147,6 +147,7 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 |----------|--------|-------------|----------------|
 | `/api/internal/status` | GET | Get server status summary | X-API-Key |
 | `/api/internal/streams` | GET | List all active streams | X-API-Key |
+| `/api/internal/streams/:streamid` | GET | Get details for one active stream | X-API-Key |
 | `/api/internal/users` | GET | List all connected users | X-API-Key |
 | `/api/internal/users/:username` | GET | Get details for a user | X-API-Key |
 | `/api/internal/users/disconnect/:username` | POST | Forcibly disconnect a user | X-API-Key |
@@ -160,6 +161,20 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 | `/api/internal/cache/by-stream/:streamid` | GET | Get cache entry by stream ID | X-API-Key |
 | `/api/internal/cache/progress/:streamid` | GET | Get cache download progress | X-API-Key |
 | `/api/internal/cache/list` | GET | List active cache entries | X-API-Key |
+| `/api/internal/history?hours=N&limit=N&offset=N` | GET | Chronological watch-history feed across all users, paginated | X-API-Key |
+| `/api/internal/history/:username?hours=N&limit=N&offset=N` | GET | Watch history for one user, paginated | X-API-Key |
+| `/api/internal/instance` | GET | Identify this deployment (name, uptime, enabled features) — for labeling data in a multi-instance dashboard | X-API-Key |
+| `/api/internal/stats?hours=N` | GET | Aggregate dashboard stats: live activity plus historical totals and top titles/users over the window (default 24h, `hours=0` for all-time) | X-API-Key |
+
+### Building a dashboard
+
+Everything above is machine-readable JSON (`{success, data, error}`) and is enough to build an external dashboard, including one that combines several stream-share instances:
+
+- **Active streams**: `/api/internal/streams` or `/api/internal/status` for live sessions and viewers.
+- **Watch history**: `/api/internal/history` (global) or `/api/internal/history/:username`, both paginated with `limit`/`offset` and filterable with `hours`.
+- **VOD search**: `/api/internal/vod/search` — the same live provider search used by the `/vod` Discord command.
+- **Overview stats**: `/api/internal/stats` for counts and leaderboards to show on a summary page.
+- **Multi-instance**: this API has no built-in concept of "instance" or "tenant" — each deployment is independent, with its own database and API key. Call `/api/internal/instance` on each one to fetch a stable display name (set via `INSTANCE_NAME`, see below) and combine results client-side by polling each instance's base URL with its own API key.
 
 ### Authentication
 
@@ -172,6 +187,8 @@ curl -H "X-API-Key: your_api_key" https://streamshare.example.com/api/internal/s
 The API key is automatically generated on first run and stored in the database.
 
 To override, set `INTERNAL_API_KEY` in the environment so the bot and integrations can authenticate reliably.
+
+Set `INSTANCE_NAME` to give this deployment a stable display name (defaults to the machine hostname), returned by `/api/internal/instance` — useful when a dashboard combines data from multiple stream-share instances.
 
 ---
 
