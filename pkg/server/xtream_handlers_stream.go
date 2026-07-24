@@ -403,13 +403,19 @@ func (c *Config) xtreamStreamMovieWithCache(ctx *gin.Context) {
 			downloadCancel() // another goroutine owns this download; discard our cancel
 		} else {
 			go func() {
+				// The background download owns downloadCtx/downloadCancel for its
+				// entire run, independent of any single proxied viewer request's
+				// lifetime — it must keep going until it actually finishes (or
+				// fails), the same way an explicit /cache request does.
 				defer c.inProgressDownloads.Delete(idRaw)
+				defer downloadCancel()
 				c.fetchToFile(downloadCtx, upstream, dest, idRaw, expires)
 			}()
 		}
 		// Proxy to upstream directly: lets the IPTV server handle Content-Length, Content-Range,
 		// and Range seeks natively. This avoids avformat errors (MP4 moov at EOF) and seek loops.
-		// Background caching continues; once complete, future requests serve from the local file.
+		// Background caching continues independently of this request; once complete, future
+		// requests serve from the local file.
 		upstreamURL, upstreamErr := url.Parse(upstream)
 		if upstreamErr != nil {
 			downloadCancel()
@@ -417,7 +423,6 @@ func (c *Config) xtreamStreamMovieWithCache(ctx *gin.Context) {
 			return
 		}
 		c.stream(ctx, upstreamURL)
-		downloadCancel() // viewer disconnected; free the provider connection
 		return
 	}
 	rpURL, err := url.Parse(fmt.Sprintf("%s/movie/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
@@ -512,12 +517,18 @@ func (c *Config) xtreamStreamSeriesWithCache(ctx *gin.Context) {
 			downloadCancel()
 		} else {
 			go func() {
+				// The background download owns downloadCtx/downloadCancel for its
+				// entire run, independent of any single proxied viewer request's
+				// lifetime — it must keep going until it actually finishes (or
+				// fails), the same way an explicit /cache request does.
 				defer c.inProgressDownloads.Delete(idRaw)
+				defer downloadCancel()
 				c.fetchToFile(downloadCtx, upstream, dest, idRaw, expires)
 			}()
 		}
 		// Proxy to upstream directly for proper headers and native Range-seek support.
-		// Background caching continues; once complete, future requests serve from the local file.
+		// Background caching continues independently of this request; once complete,
+		// future requests serve from the local file.
 		upstreamURL, upstreamErr := url.Parse(upstream)
 		if upstreamErr != nil {
 			downloadCancel()
@@ -525,7 +536,6 @@ func (c *Config) xtreamStreamSeriesWithCache(ctx *gin.Context) {
 			return
 		}
 		c.stream(ctx, upstreamURL)
-		downloadCancel() // viewer disconnected; free the provider connection
 		return
 	}
 	rpURL, err := url.Parse(fmt.Sprintf("%s/series/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
@@ -660,12 +670,18 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandlerWithCache(ctx *gin.Cont
 			downloadCancel()
 		} else {
 			go func() {
+				// The background download owns downloadCtx/downloadCancel for its
+				// entire run, independent of any single proxied viewer request's
+				// lifetime — it must keep going until it actually finishes (or
+				// fails), the same way an explicit /cache request does.
 				defer c.inProgressDownloads.Delete(idRaw)
+				defer downloadCancel()
 				c.fetchToFile(downloadCtx, upstream, dest, idRaw, expires)
 			}()
 		}
 		// Proxy to upstream directly for proper headers and native Range-seek support.
-		// Background caching continues; once complete, future requests serve from the local file.
+		// Background caching continues independently of this request; once complete,
+		// future requests serve from the local file.
 		upstreamURL, upstreamErr := url.Parse(upstream)
 		if upstreamErr != nil {
 			downloadCancel()
@@ -673,7 +689,6 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandlerWithCache(ctx *gin.Cont
 			return
 		}
 		c.stream(ctx, upstreamURL)
-		downloadCancel() // viewer disconnected; free the provider connection
 		return
 	}
 	rpURL, err := url.Parse(fmt.Sprintf("%s/movie/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
@@ -769,12 +784,18 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandlerWithCache(ctx *gin.Con
 			downloadCancel()
 		} else {
 			go func() {
+				// The background download owns downloadCtx/downloadCancel for its
+				// entire run, independent of any single proxied viewer request's
+				// lifetime — it must keep going until it actually finishes (or
+				// fails), the same way an explicit /cache request does.
 				defer c.inProgressDownloads.Delete(idRaw)
+				defer downloadCancel()
 				c.fetchToFile(downloadCtx, upstream, dest, idRaw, expires)
 			}()
 		}
 		// Proxy to upstream directly for proper headers and native Range-seek support.
-		// Background caching continues; once complete, future requests serve from the local file.
+		// Background caching continues independently of this request; once complete,
+		// future requests serve from the local file.
 		upstreamURL, upstreamErr := url.Parse(upstream)
 		if upstreamErr != nil {
 			downloadCancel()
@@ -782,7 +803,6 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandlerWithCache(ctx *gin.Con
 			return
 		}
 		c.stream(ctx, upstreamURL)
-		downloadCancel() // viewer disconnected; free the provider connection
 		return
 	}
 	rpURL, err := url.Parse(fmt.Sprintf("%s/series/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))

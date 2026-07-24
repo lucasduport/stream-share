@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lucasduport/stream-share/pkg/types"
@@ -41,50 +40,13 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 	}
 
 	streams := c.sessionManager.GetAllStreams()
-	type item struct {
-		StreamID     string    `json:"stream_id"`
-		StreamType   string    `json:"stream_type"`
-		StreamTitle  string    `json:"stream_title"`
-		EPGChannelID string    `json:"epg_channel_id,omitempty"`
-		ViewerCount  int       `json:"viewer_count"`
-		Viewers      []string  `json:"viewers"`
-		StartedAt    time.Time `json:"started_at"`
-		Duration     string    `json:"duration"`
-	}
-	summary := make([]item, 0, len(streams))
+	summary := make([]activeStreamItem, 0, len(streams))
 
 	for _, s := range streams {
 		if !s.Active {
 			continue
 		}
-		viewers := s.GetViewers()
-		names := make([]string, 0, len(viewers))
-		for u := range viewers {
-			names = append(names, u) // LDAP username
-		}
-		dur := time.Since(s.StartTime).Truncate(time.Second)
-
-		// Prefer the stored title; if it is empty or just the raw ID, resolve the
-		// name (live channel index, or a lazy get_vod_info lookup for VOD).
-		title := strings.TrimSpace(s.StreamTitle)
-		if title == "" || title == s.StreamID {
-			if name, ok := c.resolveTitleAtStart(s.StreamID, s.StreamType); ok && strings.TrimSpace(name) != "" {
-				title = name
-			}
-		}
-
-		epgID, _ := lookupEPGChannelID(normalizeStreamID(s.StreamID))
-
-		summary = append(summary, item{
-			StreamID:     s.StreamID,
-			StreamType:   s.StreamType,
-			StreamTitle:  title,
-			EPGChannelID: epgID,
-			ViewerCount:  len(names),
-			Viewers:      names,
-			StartedAt:    s.StartTime,
-			Duration:     dur.String(),
-		})
+		summary = append(summary, c.buildActiveStreamItem(s))
 	}
 
 	// Derive user and stream counts
@@ -117,6 +79,9 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 			fmt.Fprintf(&b, "- %s%s [%s] — %d viewer(s): %s (since %s)\n",
 				title, epgSuffix, it.StreamType, it.ViewerCount, strings.Join(it.Viewers, ", "), it.Duration,
 			)
+			if tech := formatTechSummary(it.Tech); tech != "" {
+				fmt.Fprintf(&b, "  %s\n", tech)
+			}
 		}
 	}
 

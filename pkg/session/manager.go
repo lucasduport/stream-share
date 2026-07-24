@@ -19,6 +19,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -139,6 +140,52 @@ type StreamBuffer struct {
 
 	// Optional disk buffer for local catchup (nil when catchup is disabled)
 	diskBuffer *catchup.DiskBuffer
+
+	// probeTaps are one-shot listeners that sample bytes already flowing through
+	// this buffer's upstream pump (e.g. for technical stream-info probing),
+	// without opening any additional connection to the provider.
+	probeTaps     []*probeTap
+	probeTapsLock sync.Mutex
+}
+
+// probeTap collects up to maxBytes of upstream data fed to it by the pump, then
+// closes done. Safe for concurrent feed (from the pump goroutine) and snapshot
+// (from whoever requested the sample), even after a timeout races a feed.
+type probeTap struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	maxBytes  int
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+func newProbeTap(maxBytes int) *probeTap {
+	return &probeTap{maxBytes: maxBytes, done: make(chan struct{})}
+}
+
+func (t *probeTap) feed(chunk []byte) {
+	select {
+	case <-t.done:
+		return
+	default:
+	}
+	t.mu.Lock()
+	if t.buf.Len() < t.maxBytes {
+		t.buf.Write(chunk)
+	}
+	full := t.buf.Len() >= t.maxBytes
+	t.mu.Unlock()
+	if full {
+		t.closeOnce.Do(func() { close(t.done) })
+	}
+}
+
+func (t *probeTap) snapshot() []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]byte, t.buf.Len())
+	copy(out, t.buf.Bytes())
+	return out
 }
 
 // NewSessionManager creates a new session manager
@@ -601,6 +648,15 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 				buffer.diskBuffer.Write(chunk)
 			}
 
+			// Feed any attached probe taps (e.g. technical-info sampling). Almost
+			// always empty, so this is a cheap lock+iterate over nothing.
+			buffer.probeTapsLock.Lock()
+			taps := buffer.probeTaps
+			buffer.probeTapsLock.Unlock()
+			for _, t := range taps {
+				t.feed(chunk)
+			}
+
 			// Touch stream LastRequested to avoid cleanup timeout while data flows.
 			if now := time.Now(); now.Sub(lastTouch) >= time.Second {
 				lastTouch = now
@@ -985,6 +1041,14 @@ func (sm *SessionManager) RegisterVODView(username, streamID, streamType, title 
 		ss.AddViewer(username)
 		ss.LastRequested = time.Now()
 		ss.Active = true
+		// The title passed on the very first request may have been an
+		// unresolved fallback (e.g. a transient lookup failure). Later calls
+		// (RegisterVODView runs on every Range request) can carry a properly
+		// resolved title, so adopt it once available instead of sticking with
+		// the initial fallback for the rest of the session.
+		if (ss.StreamTitle == "" || ss.StreamTitle == streamID) && title != "" && title != streamID {
+			ss.StreamTitle = title
+		}
 	} else {
 		ss := &types.StreamSession{
 			StreamID: streamID, StreamType: streamType, StreamTitle: title,
@@ -1176,6 +1240,47 @@ func (sm *SessionManager) GetStreamInfo(streamID string) (*types.StreamSession, 
 
 	session, exists := sm.streamSessions[streamID]
 	return session, exists
+}
+
+// CaptureStreamSample returns up to maxBytes of upstream data for an actively
+// buffered (multiplexed live) stream, sampled from bytes already flowing
+// through its existing pump — it does NOT open any additional connection to
+// the provider. Returns an error if the stream has no active shared buffer
+// (e.g. it is a VOD view, which has no persistent upstream connection to tap).
+// If the timeout elapses before maxBytes is reached, whatever was captured so
+// far is returned (which may be a usable, if smaller, sample).
+func (sm *SessionManager) CaptureStreamSample(streamID string, maxBytes int, timeout time.Duration) ([]byte, error) {
+	sm.streamLock.RLock()
+	buffer, exists := sm.streamBuffers[streamID]
+	sm.streamLock.RUnlock()
+	if !exists || !buffer.active {
+		return nil, fmt.Errorf("no active shared upstream connection for stream %s", streamID)
+	}
+
+	tap := newProbeTap(maxBytes)
+	buffer.probeTapsLock.Lock()
+	buffer.probeTaps = append(buffer.probeTaps, tap)
+	buffer.probeTapsLock.Unlock()
+	defer func() {
+		buffer.probeTapsLock.Lock()
+		for i, t := range buffer.probeTaps {
+			if t == tap {
+				buffer.probeTaps = append(buffer.probeTaps[:i], buffer.probeTaps[i+1:]...)
+				break
+			}
+		}
+		buffer.probeTapsLock.Unlock()
+	}()
+
+	select {
+	case <-tap.done:
+		return tap.snapshot(), nil
+	case <-time.After(timeout):
+		if sample := tap.snapshot(); len(sample) > 0 {
+			return sample, nil
+		}
+		return nil, fmt.Errorf("timed out sampling stream %s", streamID)
+	}
 }
 
 // SetSessionTimeout sets the user session timeout duration

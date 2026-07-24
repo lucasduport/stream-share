@@ -104,4 +104,11 @@ type ProxyConfig struct {
 	// other stream-share instances in an external dashboard. Defaults to the
 	// machine hostname when unset.
 	InstanceName string
+
+	// StreamTechProbeEnabled turns on best-effort audio/video technical info
+	// (codec, resolution, bitrate, ...) for active live streams, exposed via the
+	// dashboard API. It samples bytes already flowing through the existing
+	// shared upstream connection (no extra connection to the provider) and
+	// analyzes them with ffprobe, which must be present in the runtime image.
+	StreamTechProbeEnabled bool
 }

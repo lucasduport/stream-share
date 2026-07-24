@@ -145,7 +145,8 @@ It supports:
 			DiscordAPIURL:      viper.GetString("discord-api-url"),
 
 			// Dashboard
-			InstanceName: viper.GetString("instance-name"),
+			InstanceName:           viper.GetString("instance-name"),
+			StreamTechProbeEnabled: viper.GetBool("stream-tech-probe-enabled"),
 		}
 
 		// Use port if advertised port is not specified
@@ -239,6 +240,7 @@ func init() {
 
 	// Dashboard configuration
 	rootCmd.Flags().String("instance-name", "", "Friendly name for this instance, used to identify it in a multi-instance dashboard (defaults to hostname)")
+	rootCmd.Flags().Bool("stream-tech-probe-enabled", false, "Expose audio/video technical info (codec, resolution, bitrate) for active live streams via the dashboard API; requires ffprobe in the runtime image")
 
 	// Bind all flags to viper
 	if err := viper.BindPFlags(rootCmd.Flags()); err != nil {

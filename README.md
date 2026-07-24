@@ -170,11 +170,37 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 
 Everything above is machine-readable JSON (`{success, data, error}`) and is enough to build an external dashboard, including one that combines several stream-share instances:
 
-- **Active streams**: `/api/internal/streams` or `/api/internal/status` for live sessions and viewers.
+- **Active streams**: `/api/internal/streams` or `/api/internal/status` for live sessions and viewers. Each stream item includes a display-resolved `stream_title` (never blank — falls back through the channel/VOD name index to the raw stream ID) and, for live channels, an optional `tech` object with audio/video technical info (see below).
 - **Watch history**: `/api/internal/history` (global) or `/api/internal/history/:username`, both paginated with `limit`/`offset` and filterable with `hours`.
 - **VOD search**: `/api/internal/vod/search` — the same live provider search used by the `/vod` Discord command.
 - **Overview stats**: `/api/internal/stats` for counts and leaderboards to show on a summary page.
 - **Multi-instance**: this API has no built-in concept of "instance" or "tenant" — each deployment is independent, with its own database and API key. Call `/api/internal/instance` on each one to fetch a stable display name (set via `INSTANCE_NAME`, see below) and combine results client-side by polling each instance's base URL with its own API key.
+
+#### Technical stream info (`tech`)
+
+When `STREAM_TECH_PROBE_ENABLED=true`, active stream items (from `/api/internal/streams`, `/streams/:streamid`, `/status`, and the Discord `/status` command's text output) include a `tech` object with best-effort audio/video/subtitle characteristics detected by `ffprobe`:
+
+```json
+"tech": {
+  "container_format": "mpegts",
+  "video_codec": "h264", "width": 1920, "height": 1080, "frame_rate": 25, "video_bitrate_kbps": 4500,
+  "audio_tracks": [
+    {"index": 1, "codec": "aac", "channels": 2, "sample_rate_hz": 48000, "language": "eng", "bitrate_kbps": 128},
+    {"index": 2, "codec": "aac", "channels": 2, "sample_rate_hz": 48000, "language": "spa", "bitrate_kbps": 128}
+  ],
+  "subtitle_tracks": [
+    {"index": 3, "codec": "dvb_subtitle", "language": "eng"}
+  ],
+  "probed_at": "2026-01-01T12:00:00Z"
+}
+```
+
+Notes:
+- **No extra provider connection either way**:
+  - **Live channels** are probed from a small sample of bytes already flowing through that channel's existing shared upstream connection (the same one serving its viewers) — never an additional connection to your provider, so it's safe even on strict concurrent-connection limits. A channel is only probed once it has at least one real viewer (there's nothing to sample otherwise).
+  - **Cached VOD/series** (once fully downloaded — see [VOD Caching](#vod-caching)) are probed directly off the local file, no network involved at all. Because the whole file is available (unlike a short live sample), this reliably lists every audio and subtitle track the file contains, not just whichever one happened to be in the sample; `duration_sec` is also included. VOD/series that aren't cached (or aren't fully downloaded yet) have no `tech`.
+- Requires `ffprobe` in the runtime image (bundled in the official Docker image; if you build your own, install `ffmpeg`).
+- Off by default. Results are cached for a few minutes per stream and refreshed lazily on the next request after the cache goes stale — list endpoints never block waiting on a probe, but `/streams/:streamid` (a single-item lookup) will wait briefly for a fresh result if nothing is cached yet.
 
 ### Authentication
 
@@ -189,6 +215,8 @@ The API key is automatically generated on first run and stored in the database.
 To override, set `INTERNAL_API_KEY` in the environment so the bot and integrations can authenticate reliably.
 
 Set `INSTANCE_NAME` to give this deployment a stable display name (defaults to the machine hostname), returned by `/api/internal/instance` — useful when a dashboard combines data from multiple stream-share instances.
+
+Set `STREAM_TECH_PROBE_ENABLED=true` to enable the `tech` (audio/video technical info) field on active live streams — see [Technical stream info](#technical-stream-info-tech) above.
 
 ---
 
