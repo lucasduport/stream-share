@@ -104,17 +104,7 @@ func (c *Config) authenticate(ctx *gin.Context) {
 	// Only use LDAP authentication to validate client access
 	if c.LDAPEnabled {
 		utils.DebugLog("LDAP authentication enabled for user: %s", authReq.Username)
-		ok := ldapAuthenticate(
-			c.LDAPServer,
-			c.LDAPBaseDN,
-			c.LDAPBindDN,
-			c.LDAPBindPassword,
-			c.LDAPUserAttribute,
-			c.LDAPGroupAttribute,
-			c.LDAPRequiredGroup,
-			authReq.Username,
-			authReq.Password,
-		)
+		ok := c.ldapAuthenticateCached(authReq.Username, authReq.Password)
 		if !ok {
 			utils.DebugLog("LDAP authentication failed for user: %s", authReq.Username)
 			ctx.AbortWithStatus(http.StatusUnauthorized)
@@ -159,17 +149,7 @@ func (c *Config) appAuthenticate(ctx *gin.Context) {
 	// Use LDAP authentication if enabled
 	if c.LDAPEnabled {
 		utils.DebugLog("LDAP app authentication for user: %s", q["username"][0])
-		ok := ldapAuthenticate(
-			c.LDAPServer,
-			c.LDAPBaseDN,
-			c.LDAPBindDN,
-			c.LDAPBindPassword,
-			c.LDAPUserAttribute,
-			c.LDAPGroupAttribute,
-			c.LDAPRequiredGroup,
-			q["username"][0],
-			q["password"][0],
-		)
+		ok := c.ldapAuthenticateCached(q["username"][0], q["password"][0])
 		if !ok {
 			utils.DebugLog("LDAP app authentication failed for user: %s", q["username"][0])
 			ctx.AbortWithStatus(http.StatusUnauthorized)

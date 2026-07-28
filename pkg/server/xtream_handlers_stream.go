@@ -364,7 +364,7 @@ func (c *Config) xtreamStreamMovieWithCache(ctx *gin.Context) {
 				} else {
 					ct = "video/mp4"
 				}
-				_ = c.db.TouchVODCache(idRaw)
+				c.touchVODCache(idRaw)
 				if strings.ToLower(entry.Status) == "ready" {
 					utils.InfoLog("Serving cached movie for %s from %s", c.vodLabel(idRaw), entry.FilePath)
 					serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
@@ -481,7 +481,7 @@ func (c *Config) xtreamStreamSeriesWithCache(ctx *gin.Context) {
 				} else {
 					ct = "video/mp4"
 				}
-				_ = c.db.TouchVODCache(idRaw)
+				c.touchVODCache(idRaw)
 				if strings.ToLower(entry.Status) == "ready" {
 					utils.InfoLog("Serving cached episode for %s from %s", c.vodLabel(idRaw), entry.FilePath)
 					serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
@@ -634,7 +634,7 @@ func (c *Config) xtreamProxyCredentialsMovieStreamHandlerWithCache(ctx *gin.Cont
 				} else {
 					ct = "video/mp4"
 				}
-				_ = c.db.TouchVODCache(idRaw)
+				c.touchVODCache(idRaw)
 				if strings.ToLower(entry.Status) == "ready" {
 					utils.InfoLog("Serving cached movie (proxy creds path) for %s from %s", c.vodLabel(idRaw), entry.FilePath)
 					serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
@@ -749,7 +749,7 @@ func (c *Config) xtreamProxyCredentialsSeriesStreamHandlerWithCache(ctx *gin.Con
 				} else {
 					ct = "video/mp4"
 				}
-				_ = c.db.TouchVODCache(idRaw)
+				c.touchVODCache(idRaw)
 				if strings.ToLower(entry.Status) == "ready" {
 					utils.InfoLog("Serving cached episode (proxy creds path) for %s from %s", c.vodLabel(idRaw), entry.FilePath)
 					serveLocalFileRange(ctx, entry.FilePath, ct, "", false)

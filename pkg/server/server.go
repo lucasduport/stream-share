@@ -208,6 +208,17 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		}
 	}
 
+	// The LDAP cache trades revocation latency for a large drop in directory
+	// traffic, so make the active window visible at startup rather than leaving
+	// an operator to infer it.
+	if config.LDAPEnabled {
+		if mins := config.LDAPAuthCacheMinutes; mins > 0 {
+			utils.InfoLog("Bootstrap: LDAP auth cache ENABLED (successful logins trusted for %d minute(s); disabled accounts keep working until their entry expires)", mins)
+		} else {
+			utils.InfoLog("Bootstrap: LDAP auth cache DISABLED — every request re-checks the directory")
+		}
+	}
+
 	// Configure session parameters from configuration. Each setter is only
 	// applied when the value is > 0, leaving the manager defaults otherwise.
 	if serverConfig.sessionManager != nil {
@@ -334,6 +345,25 @@ func (c *Config) Serve() error {
 	c.startNameIndexRefresher(nameRefreshStop)
 	defer close(nameRefreshStop)
 
+	// Drop expired LDAP auth-cache entries so they do not linger for the life of
+	// the process. Only successes are cached, so the map is small either way.
+	if c.LDAPEnabled && c.ldapCacheTTL() > 0 {
+		ldapSweepStop := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(c.ldapCacheTTL())
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ldapSweepStop:
+					return
+				case <-ticker.C:
+					sweepLDAPCache()
+				}
+			}
+		}()
+		defer close(ldapSweepStop)
+	}
+
 	if c.sessionManager != nil {
 		defer c.sessionManager.Stop()
 	}
@@ -411,17 +441,7 @@ func (c *Config) authWithPathCredentials() gin.HandlerFunc {
 
 		// If LDAP is enabled, authenticate against LDAP
 		if c.LDAPEnabled {
-			ok := ldapAuthenticate(
-				c.LDAPServer,
-				c.LDAPBaseDN,
-				c.LDAPBindDN,
-				c.LDAPBindPassword,
-				c.LDAPUserAttribute,
-				c.LDAPGroupAttribute,
-				c.LDAPRequiredGroup,
-				username,
-				password,
-			)
+			ok := c.ldapAuthenticateCached(username, password)
 			if !ok {
 				utils.DebugLog("LDAP authentication failed for user in path: %s", username)
 				ctx.AbortWithStatus(http.StatusUnauthorized)
@@ -470,7 +490,7 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 			if ext == "" {
 				ext = ".mp4"
 			}
-			_ = c.db.TouchVODCache(idRaw)
+			c.touchVODCache(idRaw)
 			var ct string
 			switch ext {
 			case ".ts":
@@ -587,7 +607,7 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 				} else {
 					ct = "video/mp4"
 				}
-				_ = c.db.TouchVODCache(streamIDRaw)
+				c.touchVODCache(streamIDRaw)
 				serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
 				return
 			}

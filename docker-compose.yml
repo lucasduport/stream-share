@@ -43,6 +43,12 @@ services:
       LDAP_USER_ATTRIBUTE: "uid"       # LDAP attribute containing username
       LDAP_GROUP_ATTRIBUTE: "memberOf" # LDAP attribute for group membership
       LDAP_REQUIRED_GROUP: "iptv"      # Group required for authentication
+      # Players re-send credentials on every request, including every Range request
+      # of a movie, so one playback can mean hundreds of LDAP binds. Successful
+      # logins are cached for this long. Only successes are cached, so a wrong
+      # password is always re-checked — but a disabled account or changed password
+      # keeps working until its entry expires. Set to 0 to re-check every request.
+      LDAP_AUTH_CACHE_MINUTES: "5"
 
       # Database Configuration
       DB_HOST: "db"                    # Postgres hostname 

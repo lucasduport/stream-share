@@ -46,8 +46,12 @@ func (m *DBManager) UpsertVODCache(e *types.VODCacheEntry) error {
           episode = CASE WHEN EXCLUDED.episode IS NOT NULL AND EXCLUDED.episode <> 0 THEN EXCLUDED.episode ELSE vod_cache.episode END,
           file_path = COALESCE(NULLIF(EXCLUDED.file_path, ''), vod_cache.file_path),
           requested_by = COALESCE(NULLIF(EXCLUDED.requested_by, ''), vod_cache.requested_by),
-          downloaded_bytes = EXCLUDED.downloaded_bytes,
-          total_bytes = EXCLUDED.total_bytes,
+          -- Guarded like the columns around them: a proxied Range request for an
+          -- item that is still downloading re-runs this upsert with zeroed
+          -- counters, and an unconditional assignment reset the progress the
+          -- downloader had just reported. Use DeleteVODCacheEntry to start over.
+          downloaded_bytes = CASE WHEN EXCLUDED.downloaded_bytes IS NOT NULL AND EXCLUDED.downloaded_bytes <> 0 THEN EXCLUDED.downloaded_bytes ELSE vod_cache.downloaded_bytes END,
+          total_bytes = CASE WHEN EXCLUDED.total_bytes IS NOT NULL AND EXCLUDED.total_bytes <> 0 THEN EXCLUDED.total_bytes ELSE vod_cache.total_bytes END,
           size_bytes = CASE WHEN EXCLUDED.size_bytes IS NOT NULL AND EXCLUDED.size_bytes <> 0 THEN EXCLUDED.size_bytes ELSE vod_cache.size_bytes END,
           status = COALESCE(NULLIF(EXCLUDED.status, ''), vod_cache.status),
           expires_at = EXCLUDED.expires_at,
@@ -73,6 +77,27 @@ func (m *DBManager) GetVODCache(streamID string) (*types.VODCacheEntry, error) {
 		return nil, err
 	}
 	return &e, nil
+}
+
+// UpdateVODProgress writes just the download counters.
+//
+// The downloader reports progress on a timer for the whole length of a download,
+// which for a feature film is thousands of updates. Doing that through
+// UpsertVODCache meant rewriting all fifteen columns each time to move two
+// integers, so this narrow statement exists purely to keep that cheap.
+func (m *DBManager) UpdateVODProgress(streamID string, downloaded, total int64) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := m.db.ExecContext(ctx, `
+        UPDATE vod_cache
+           SET downloaded_bytes = $2,
+               total_bytes = CASE WHEN $3 <> 0 THEN $3 ELSE total_bytes END,
+               last_access = CURRENT_TIMESTAMP
+         WHERE stream_id = $1`, streamID, downloaded, total)
+	return err
 }
 
 // TouchVODCache updates last_access

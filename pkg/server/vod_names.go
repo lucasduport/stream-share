@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lucasduport/stream-share/pkg/utils"
 	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
@@ -123,31 +124,97 @@ func (c *Config) resolveStreamName(streamID string) (string, bool) {
 	return vodNameCached(streamID)
 }
 
+// titleMissRetryAfter is how long a failed VOD title lookup is remembered before
+// it is attempted again. Long enough that a playback's Range requests never
+// rescan, short enough that a title appearing in a refreshed catalogue is picked
+// up without a restart.
+const titleMissRetryAfter = 30 * time.Minute
+
+// titleAttempt is a memoised outcome of resolveTitleAtStart. A hit is kept
+// indefinitely (titles do not change); a miss expires so it can be retried.
+type titleAttempt struct {
+	title   string
+	expires time.Time // zero for hits, which never expire
+}
+
+var (
+	titleResolvedMu    sync.RWMutex
+	titleResolvedIndex = map[string]titleAttempt{} // normalized id -> outcome
+)
+
+// titleResolvedLookup returns a previously resolved outcome, if still valid.
+func titleResolvedLookup(streamID string) (string, bool) {
+	id := normalizeStreamID(streamID)
+	titleResolvedMu.RLock()
+	a, ok := titleResolvedIndex[id]
+	titleResolvedMu.RUnlock()
+	if !ok {
+		return "", false
+	}
+	if a.title == "" && !a.expires.IsZero() && time.Now().After(a.expires) {
+		return "", false // stale miss: worth another look
+	}
+	return a.title, true
+}
+
+// titleResolvedStore memoises an outcome, expiring misses so they get retried.
+func titleResolvedStore(streamID, title string) {
+	id := normalizeStreamID(streamID)
+	a := titleAttempt{title: title}
+	if title == "" {
+		a.expires = time.Now().Add(titleMissRetryAfter)
+	}
+	titleResolvedMu.Lock()
+	titleResolvedIndex[id] = a
+	titleResolvedMu.Unlock()
+}
+
 // resolveTitleAtStart resolves a stream's title when it first starts, allowed to
 // hit the network for VOD. Used off the lock to populate StreamTitle and warm the
 // VOD cache so subsequent (locked) log lookups resolve from cache.
+//
+// The VOD branches are memoised, misses included. Both are expensive — a
+// get_vod_info round trip, or a linear scan of the provider's full catalogue —
+// and this runs per HTTP Range request, of which a single playback issues
+// hundreds. Without memoising the miss, a title that cannot be found is searched
+// for again on every one of them.
 func (c *Config) resolveTitleAtStart(streamID, streamType string) (string, bool) {
 	if name, ok := c.getChannelNameByID(streamID); ok && strings.TrimSpace(name) != "" {
 		return name, true
 	}
+
+	// Only VOD is memoised here. Live names come from the channel index above,
+	// which fills in asynchronously — caching a miss for a live stream would
+	// pin an empty title that never recovers.
+	if streamType != "movie" && streamType != "series" {
+		return "", false
+	}
+
+	if title, done := titleResolvedLookup(streamID); done {
+		return title, title != ""
+	}
+
+	title := ""
 	switch streamType {
 	case "movie":
 		if name, ok := c.vodTitleByID(streamID); ok {
-			return name, true
-		}
-		// Fall back to the cached VOD M3U title if the API gave us nothing.
-		if t := c.findVODTitleInCache("movie", streamID); strings.TrimSpace(t) != "" {
-			return t, true
+			title = strings.TrimSpace(name)
+		} else if t := c.findVODTitleInCache("movie", streamID); strings.TrimSpace(t) != "" {
+			// The API gave us nothing usable; fall back to the cached VOD M3U.
+			title = strings.TrimSpace(t)
 		}
 	case "series":
 		// get_vod_info is keyed by a movie vod_id and cannot resolve a series
 		// episode id, so series rely on the cached VOD M3U title when available.
-		if t := c.findVODTitleInCache("series", streamID); strings.TrimSpace(t) != "" {
-			c.cacheVODName(streamID, t)
-			return t, true
-		}
+		title = strings.TrimSpace(c.findVODTitleInCache("series", streamID))
 	}
-	return "", false
+
+	titleResolvedStore(streamID, title)
+	if title == "" {
+		return "", false
+	}
+	c.cacheVODName(streamID, title)
+	return title, true
 }
 
 // cacheVODName stores a resolved title in the VOD cache (e.g. one found via the
@@ -158,9 +225,17 @@ func (c *Config) cacheVODName(streamID, title string) {
 		return
 	}
 	id := normalizeStreamID(streamID)
+
+	// Skip the write when we already hold this exact title: the row would be
+	// identical, and this is reached from per-request paths.
 	vodNameMu.Lock()
+	unchanged := vodNameIndex[id] == title
 	vodNameIndex[id] = title
 	vodNameMu.Unlock()
+	if unchanged {
+		return
+	}
+
 	if err := c.db.UpsertStreamName(id, "vod", title, ""); err != nil {
 		utils.WarnLog("stream_names: failed to persist VOD name for %s: %v", id, err)
 	}

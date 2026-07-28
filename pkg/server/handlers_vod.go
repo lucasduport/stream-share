@@ -498,7 +498,35 @@ func (c *Config) getVODRequestStatus(ctx *gin.Context) {
 
 // findVODExtensionInCache tries to locate the original extension for a given stream ID
 // by scanning the cached VOD M3U or series entries. Returns empty string if unknown.
+// vodExtCache memoises extension lookups, which are linear scans of the
+// provider's full catalogue. This is reached per HTTP Range request whenever the
+// client omits the extension and the item is not yet cached — so during a
+// download, one playback would otherwise scan the catalogue hundreds of times.
+// A miss is memoised too, since re-scanning to find nothing again is the
+// expensive case; the entry expires so a refreshed catalogue is still picked up.
+var vodExtCache sync.Map // basePath+"\x00"+streamID -> titleAttempt (title field holds the extension)
+
 func (c *Config) findVODExtensionInCache(basePath, streamID string) string {
+	key := basePath + "\x00" + streamID
+	if v, ok := vodExtCache.Load(key); ok {
+		a := v.(titleAttempt)
+		if a.title != "" || a.expires.IsZero() || time.Now().Before(a.expires) {
+			return a.title
+		}
+	}
+
+	ext := c.scanVODExtension(basePath, streamID)
+
+	a := titleAttempt{title: ext}
+	if ext == "" {
+		a.expires = time.Now().Add(titleMissRetryAfter)
+	}
+	vodExtCache.Store(key, a)
+	return ext
+}
+
+// scanVODExtension does the actual catalogue scans.
+func (c *Config) scanVODExtension(basePath, streamID string) string {
 	// First scan the cached VOD M3U for both movies and series
 	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
 		if ext := findExtInM3U(m3uPath, basePath, streamID); ext != "" {
@@ -551,7 +579,7 @@ func (c *Config) startCache(ctx *gin.Context) {
 	// If already cached and valid, return it
 	if c.db != nil {
 		if entry, err := c.db.GetVODCache(req.StreamID); err == nil && entry != nil && entry.Status == "ready" {
-			_ = c.db.TouchVODCache(req.StreamID)
+			c.touchVODCache(req.StreamID)
 			ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
 				"cached":     true,
 				"stream_id":  entry.StreamID,
@@ -865,8 +893,10 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 					return
 				}
 				downloaded += int64(nr)
-				if c.db != nil && time.Since(lastUpdate) > 1*time.Second {
-					_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: streamID, FilePath: dest, DownloadedBytes: downloaded, TotalBytes: total, Status: "downloading", ExpiresAt: expires, LastAccess: time.Now()})
+				if c.db != nil && time.Since(lastUpdate) > vodProgressInterval {
+					// Narrow update: only the counters move, so there is no need
+					// to rewrite the whole row on every tick.
+					_ = c.db.UpdateVODProgress(streamID, downloaded, total)
 					lastUpdate = time.Now()
 				}
 			}
@@ -923,6 +953,40 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID strin
 			entry.Title = finalTitle
 		}
 		_ = c.db.UpsertVODCache(entry)
+	}
+}
+
+// vodTouchInterval throttles last_access updates for a cached VOD item.
+//
+// The column is only read by cleanupStaleVODFiles, which compares it against a
+// multi-hour staleness window on a daily sweep, so minute granularity loses
+// nothing. Unthrottled it was a row rewrite per HTTP Range request, and one
+// playback issues hundreds — each an UPDATE, a WAL record and a dead tuple for
+// autovacuum to collect.
+const vodTouchInterval = time.Minute
+
+// vodProgressInterval is how often an in-flight download reports its byte
+// counters. The only consumer is the Discord progress readout, which nobody
+// watches at one-second resolution.
+const vodProgressInterval = 5 * time.Second
+
+var vodLastTouch sync.Map // streamID -> time.Time
+
+// touchVODCache marks a cached item as recently used, at most once per
+// vodTouchInterval per stream.
+func (c *Config) touchVODCache(streamID string) {
+	if c.db == nil {
+		return
+	}
+	now := time.Now()
+	if prev, ok := vodLastTouch.Load(streamID); ok {
+		if now.Sub(prev.(time.Time)) < vodTouchInterval {
+			return
+		}
+	}
+	vodLastTouch.Store(streamID, now)
+	if err := c.db.TouchVODCache(streamID); err != nil {
+		utils.DebugLog("vod cache: failed to touch last_access for %s: %v", streamID, err)
 	}
 }
 

@@ -108,14 +108,15 @@ It supports:
 			CustomId:             viper.GetString("custom-id"),
 			XtreamGenerateApiGet: viper.GetBool("xtream-api-get-enabled"),
 			// LDAP configuration
-			LDAPEnabled:        viper.GetBool("ldap-enabled"),
-			LDAPServer:         viper.GetString("ldap-server"),
-			LDAPBaseDN:         viper.GetString("ldap-base-dn"),
-			LDAPBindDN:         viper.GetString("ldap-bind-dn"),
-			LDAPBindPassword:   viper.GetString("ldap-bind-password"),
-			LDAPUserAttribute:  viper.GetString("ldap-user-attribute"),
-			LDAPGroupAttribute: viper.GetString("ldap-group-attribute"),
-			LDAPRequiredGroup:  viper.GetString("ldap-required-group"),
+			LDAPEnabled:          viper.GetBool("ldap-enabled"),
+			LDAPServer:           viper.GetString("ldap-server"),
+			LDAPBaseDN:           viper.GetString("ldap-base-dn"),
+			LDAPBindDN:           viper.GetString("ldap-bind-dn"),
+			LDAPBindPassword:     viper.GetString("ldap-bind-password"),
+			LDAPUserAttribute:    viper.GetString("ldap-user-attribute"),
+			LDAPGroupAttribute:   viper.GetString("ldap-group-attribute"),
+			LDAPRequiredGroup:    viper.GetString("ldap-required-group"),
+			LDAPAuthCacheMinutes: viper.GetInt("ldap-auth-cache-minutes"),
 
 			// Reverse proxy / public URL
 			ReverseProxyEnabled: viper.GetBool("reverse-proxy-enabled"),
@@ -215,6 +216,7 @@ func init() {
 	rootCmd.Flags().String("ldap-user-attribute", "uid", "LDAP username attribute")
 	rootCmd.Flags().String("ldap-group-attribute", "memberOf", "LDAP group attribute")
 	rootCmd.Flags().String("ldap-required-group", "iptv", "Required LDAP group")
+	rootCmd.Flags().Int("ldap-auth-cache-minutes", 5, "Cache successful LDAP authentications for this many minutes (0 = re-check the directory on every request)")
 
 	// Reverse proxy / public URL configuration
 	rootCmd.Flags().Bool("reverse-proxy-enabled", false, "Behind a reverse proxy: drop the port in generated public URLs")

@@ -71,6 +71,9 @@ type ProxyConfig struct {
 	LDAPUserAttribute  string
 	LDAPGroupAttribute string
 	LDAPRequiredGroup  string
+	// LDAPAuthCacheMinutes caches successful LDAP authentications for this long.
+	// 0 disables the cache, so every request re-checks the directory.
+	LDAPAuthCacheMinutes int
 
 	// Reverse proxy / public URL configuration
 	ReverseProxyEnabled bool

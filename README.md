@@ -240,6 +240,19 @@ STREAM_TIMEOUT_MINUTES=240   # Stream session timeout (default: 120)
 TEMP_LINK_HOURS=24           # Temporary link validity (default: 24)
 ```
 
+### LDAP Authentication Caching
+
+Media players re-send credentials on every request — including every HTTP Range request while a movie plays — so a single playback can mean hundreds of LDAP bind and search round trips. Successful authentications are cached briefly to avoid that:
+
+```
+LDAP_AUTH_CACHE_MINUTES=5    # Trust a successful login for this long (default: 5; 0 = re-check every request)
+```
+
+Behavior:
+- **Only successes are cached.** A failed login always re-checks the directory, so a corrected password works immediately and an LDAP outage is never remembered as a denial.
+- Credentials are never stored. The cache key is a keyed hash, salted per process.
+- **The trade-off is revocation latency**: a disabled account or changed password keeps working until its entry expires. Set `LDAP_AUTH_CACHE_MINUTES=0` if revocation must take effect at once.
+
 ### Direct Stream URLs
 
 StreamShare supports direct stream URLs with proxy authentication in the path:
