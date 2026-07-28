@@ -20,10 +20,13 @@ package server
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +52,77 @@ var (
 	epgIndex   map[string]string // normalized stream_id → tvg-id
 )
 
+// persistInFlight tracks which sources currently have a persist running.
+var persistInFlight sync.Map // source -> struct{}
+
+// lastPersisted records the content hash of the last index successfully written
+// per source, so an unchanged index is not rewritten.
+var lastPersisted sync.Map // source -> string
+
+// streamNamesHash fingerprints the exact content that would be written. Keys are
+// sorted so the hash is stable across map iteration order.
+func streamNamesHash(names map[string]string, epgIDs map[string]string) string {
+	ids := make([]string, 0, len(names))
+	for id := range names {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	h := sha256.New()
+	for _, id := range ids {
+		h.Write([]byte(id))
+		h.Write([]byte{0})
+		h.Write([]byte(names[id]))
+		h.Write([]byte{0})
+		h.Write([]byte(epgIDs[id]))
+		h.Write([]byte{1})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// persistStreamNamesAsync writes the name index to the database off the calling
+// goroutine.
+//
+// This must never run inline: updateAPIChannelIndex is reached from the
+// get_live_streams handler, and a full channel list is thousands of rows. Doing
+// that write synchronously kept the player waiting until it gave up with a
+// broken pipe — and because a disconnected client does not stop the handler, its
+// retry stacked another write on top, saturating the connection pool until
+// unrelated things (the Discord bot's heartbeat) starved too. The in-flight
+// guard is what stops that pile-up; the in-memory index is still updated
+// synchronously by the caller, so name resolution is unaffected.
+// It also skips the write entirely when the index is byte-for-byte what was last
+// written. Players refetch the channel list routinely and the background
+// refresher runs on a timer, but the names themselves change rarely — so the
+// common case is rewriting thousands of identical rows for nothing. Hashing a
+// few thousand entries costs microseconds against the round trips it saves.
+func (c *Config) persistStreamNamesAsync(names map[string]string, epgIDs map[string]string, source string) {
+	if c.db == nil || len(names) == 0 {
+		return
+	}
+
+	hash := streamNamesHash(names, epgIDs)
+	if prev, ok := lastPersisted.Load(source); ok && prev.(string) == hash {
+		utils.DebugLog("stream_names: %s index unchanged (%d entries); skipping write", source, len(names))
+		return
+	}
+
+	if _, busy := persistInFlight.LoadOrStore(source, struct{}{}); busy {
+		utils.DebugLog("stream_names: persist for source=%s already running; skipping this round", source)
+		return
+	}
+	go func() {
+		defer persistInFlight.Delete(source)
+		if err := c.db.UpsertStreamNames(names, epgIDs, source); err != nil {
+			utils.WarnLog("stream_names: failed to persist %s channel index: %v", source, err)
+			return
+		}
+		// Only remember the hash on success, so a failed write is retried next time.
+		lastPersisted.Store(source, hash)
+		utils.DebugLog("stream_names: persisted %d %s entries", len(names), source)
+	}()
+}
+
 // updateAPIChannelIndex replaces the API-sourced name index with id→name pairs and optional EPG IDs.
 func (c *Config) updateAPIChannelIndex(names map[string]string, epgIDs map[string]string) {
 	if len(names) == 0 {
@@ -64,9 +138,7 @@ func (c *Config) updateAPIChannelIndex(names map[string]string, epgIDs map[strin
 		epgIndexMu.Unlock()
 	}
 
-	if err := c.db.UpsertStreamNames(names, epgIDs, "api"); err != nil {
-		utils.WarnLog("stream_names: failed to persist API channel index: %v", err)
-	}
+	c.persistStreamNamesAsync(names, epgIDs, "api")
 }
 
 // lookupEPGChannelID returns the EPG channel ID (tvg-id) for a normalized stream ID.
@@ -175,10 +247,10 @@ func (c *Config) ensureChannelIndex() {
 	epgIndex = newEPGIndex
 	epgIndexMu.Unlock()
 
-	// Write to DB (best-effort, non-fatal)
-	if err := c.db.UpsertStreamNames(newIndex, newEPGIndex, "m3u"); err != nil {
-		utils.WarnLog("stream_names: failed to persist M3U channel index: %v", err)
-	}
+	// Write to DB off this goroutine (best-effort, non-fatal). ensureChannelIndex
+	// runs under the channelIndex write lock and is reached from name lookups on
+	// hot paths, so the write must not block it.
+	c.persistStreamNamesAsync(newIndex, newEPGIndex, "m3u")
 
 	channelIndex = newIndex
 	channelIndexPath = m3uPath
