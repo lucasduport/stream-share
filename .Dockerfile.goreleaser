@@ -1,4 +1,4 @@
 FROM alpine:3
-RUN apk add ca-certificates ffmpeg
+RUN apk add ca-certificates ffmpeg ttf-dejavu
 COPY stream-share /
 ENTRYPOINT ["/stream-share"]

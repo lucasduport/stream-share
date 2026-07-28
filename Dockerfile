@@ -21,8 +21,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o stream-share .
 FROM alpine:3.19
 
 # Install CA certificates for runtime HTTPS, and ffmpeg (for ffprobe, used by
-# the optional live-stream technical-info probe; see STREAM_TECH_PROBE_ENABLED)
-RUN apk add --no-cache ca-certificates ffmpeg
+# the optional live-stream technical-info probe; see STREAM_TECH_PROBE_ENABLED,
+# and for rendering the on-screen error slate; see ERROR_SLATE_ENABLED).
+# ttf-dejavu supplies the font the slate's drawtext filter needs — without it
+# slates are skipped and failed streams drop as they did before.
+RUN apk add --no-cache ca-certificates ffmpeg ttf-dejavu
 
 # Create non-root user for security
 RUN adduser -D appuser

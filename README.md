@@ -22,6 +22,10 @@ StreamShare is a comprehensive IPTV management solution that allows secure shari
   - TiviMate (and other Xtream-compatible players) automatically show the rewind UI on all channels
   - Channels that already have native catchup continue to use the provider's own timeshift endpoint unchanged
   - Configurable buffer duration (default 4 hours) and pause grace period for seamless pause/resume
+- **On-Screen Error Slates**
+  - When the provider fails, viewers see the reason rendered on screen instead of a frozen picture or a silently dropped connection
+  - Shows the error code, its official meaning, and a message you control per code
+  - Keeps retrying the provider behind the slate and resumes live video if it comes back
 - **User Experience**
   - Enhanced VOD search, including series episodes (queries like "the office s02e04")
   - Discord bot with prettier embed-based responses, dropdown selection, and pagination
@@ -128,6 +132,7 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 | `/cache <title> <days>` | Cache a movie or episode on the server for 1–14 days |
 | `/cached` | List cached items and expiration times |
 | `/status` | Show server status (admin only) |
+| `/history [username] [period]` | Watch history timeline for live and VOD (admin only). Omit `username` for a feed across all clients; `period` selects the window (24h, 7d, 30d, 90d, all time) |
 | `/disconnect <ldap_username>` | Disconnect a user from the stream |
 | `/timeout <ldap_username> <minutes>` | Temporarily block a user for N minutes |
 
@@ -304,6 +309,87 @@ At 10 Mbps a 4-hour buffer is approximately **18 GB per active channel**. Only c
 | `CATCHUP_DURATION_HOURS` | `4` | Hours of catchup to buffer and advertise to clients |
 | `CATCHUP_PAUSE_GRACE_MINUTES` | `5` | Minutes to keep recording after the last viewer leaves (for pause/resume); channel switches bypass this |
 | `TZ` | — | **Required.** Must match the timezone of your IPTV clients — TiviMate sends local time in timeshift URLs (e.g. `TZ=Europe/Amsterdam`) |
+
+---
+
+## On-Screen Error Slates
+
+When a provider refuses or fails to answer, players give the viewer nothing useful — the picture freezes, or the connection closes with no explanation. Instead of dropping the stream, StreamShare can play a short generated clip that says what went wrong, and keep retrying the provider behind it.
+
+The slate shows three things: the error code, its official meaning, and a message you control.
+
+```
+              Error 456 - Connection Limit
+          All provider connections are in use.
+                      NL Sport 1
+```
+
+### How It Works
+
+1. A viewer opens a live channel and the provider fails — a 403, a 404, a connection limit, a timeout, or an unreachable host.
+2. The failure is classified and turned into a slate rendered with ffmpeg, then cached on disk so the same error is never rendered twice.
+3. Every viewer of that channel sees the slate while the provider is retried in the background, with backoff.
+4. If the provider comes back, live video resumes. If it does not come back within the retry budget, the stream stops as it did before.
+
+Behavior:
+- Applies to **live and timeshift** streams only. Movies and series are served over HTTP byte ranges, where injecting a clip would corrupt the response, so they are untouched.
+- Requires `ffmpeg` and the DejaVu font, both present in the Docker image. If either is missing the feature quietly disables itself and streams drop exactly as before — so upgrading is safe and downgrading loses nothing.
+- Resuming live video after a slate is a stream discontinuity. Most players re-sync on it, but behavior varies by player.
+
+### Configuration
+
+| Env var | Default | Description |
+|---|---|---|
+| `ERROR_SLATE_ENABLED` | `true` | Set to `false` to drop failed streams instead of showing a slate |
+| `ERROR_SLATE_RETRY_MAX_MINUTES` | `10` | How long to keep showing the slate and retrying the provider before giving up |
+| `ERROR_SLATE_MESSAGES_FILE` | — | Optional path to a JSON file customising the message shown per error code |
+
+### Customising the messages
+
+The built-in messages are deliberately generic. To write your own — pointing users at your support channel, say — create a JSON file and point `ERROR_SLATE_MESSAGES_FILE` at it:
+
+```yaml
+# docker-compose.yml
+environment:
+  ERROR_SLATE_MESSAGES_FILE: "/root/error-messages.json"
+volumes:
+  - ss_config:/root     # error-messages.json lives here
+```
+
+The file is a single object mapping an error key to the text for that error:
+
+```json
+{
+  "403": { "message": "Your subscription does not include this channel." },
+  "404": { "message": "This channel was removed by the provider." },
+  "456": { "meaning": "Connection limit", "message": "All slots are in use. Ask in #support." },
+  "UNREACHABLE": { "message": "The provider is down. We are on it." }
+}
+```
+
+**The key** is either an HTTP status code as a string (`"403"`), or one of these for failures that never produced a response:
+
+| Key | When it is used |
+|---|---|
+| `UNREACHABLE` | The provider could not be contacted at all |
+| `TIMEOUT` | The provider accepted the connection but did not respond in time |
+| `DNS` | The provider's hostname could not be resolved |
+| `TLS` | The provider's certificate could not be verified |
+
+**The fields** are both optional, and each falls back independently — so overriding one does not blank the other:
+
+| Field | Purpose |
+|---|---|
+| `message` | Your custom text, shown under the headline. Falls back to the built-in message for that code, then to a generic one. |
+| `meaning` | The official meaning shown next to the code. Usually omit it: standard HTTP codes already resolve to their proper text (`403` → `Forbidden`). Worth setting only for non-standard provider codes like `456` or `461`, which have no official meaning. |
+
+Notes:
+- Any key not in the file keeps its built-in wording, so the file only needs the codes you actually want to change.
+- Unknown keys are accepted, so you can add a provider-specific code (`"499"`) without a code change.
+- The file is read once at startup — restart the container after editing it.
+- A missing or malformed file logs a warning and falls back to the built-in messages. Bad JSON never stops streams from being served.
+- Text is sanitised before rendering, so characters that are meaningful to ffmpeg (`:`, quotes, `\`, `%`) are dropped from the picture. Keep messages plain.
+- Long messages wrap to two lines and are then truncated — aim for something short enough to read at a glance from the sofa.
 
 ---
 

@@ -33,6 +33,7 @@ const (
 	cacheRootDefault = "stream-share"
 	vodSubdir        = "vod"
 	catchupSubdir    = "catchup"
+	slateSubdir      = "slate"
 )
 
 // CacheRoot returns the root cache directory: CACHE_FOLDER when set, otherwise a
@@ -52,4 +53,9 @@ func VODCacheDir() string {
 // CatchupBufferDir returns the subdirectory holding live catchup buffer files.
 func CatchupBufferDir() string {
 	return filepath.Join(CacheRoot(), catchupSubdir)
+}
+
+// SlateCacheDir returns the subdirectory holding generated error-slate clips.
+func SlateCacheDir() string {
+	return filepath.Join(CacheRoot(), slateSubdir)
 }

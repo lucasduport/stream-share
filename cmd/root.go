@@ -132,6 +132,11 @@ It supports:
 			CatchupDurationHours:     viper.GetInt("catchup-duration-hours"),
 			CatchupPauseGraceMinutes: viper.GetInt("catchup-pause-grace-minutes"),
 
+			// Error slate
+			ErrorSlateEnabled:         viper.GetBool("error-slate-enabled"),
+			ErrorSlateRetryMaxMinutes: viper.GetInt("error-slate-retry-max-minutes"),
+			ErrorSlateMessagesFile:    viper.GetString("error-slate-messages-file"),
+
 			// Session / stream timeouts
 			SessionTimeoutMinutes:        viper.GetInt("session-timeout-minutes"),
 			StreamTimeoutMinutes:         viper.GetInt("stream-timeout-minutes"),
@@ -225,6 +230,11 @@ func init() {
 	rootCmd.Flags().Bool("catchup-enabled", false, "Enable local catchup buffering for live streams")
 	rootCmd.Flags().Int("catchup-duration-hours", 4, "Number of hours of catchup buffer to retain")
 	rootCmd.Flags().Int("catchup-pause-grace-minutes", 5, "Minutes a catchup live stream keeps recording after the last viewer disconnects")
+
+	// Error slate configuration
+	rootCmd.Flags().Bool("error-slate-enabled", true, "Show upstream errors as an on-screen slate instead of dropping the stream (requires ffmpeg)")
+	rootCmd.Flags().Int("error-slate-retry-max-minutes", 10, "How long to keep showing the slate and retrying upstream before giving up")
+	rootCmd.Flags().String("error-slate-messages-file", "", "Optional JSON file overriding the per-error-code slate messages")
 
 	// Session / stream timeout configuration
 	rootCmd.Flags().Int("session-timeout-minutes", 0, "Session inactivity timeout in minutes (0 = manager default)")

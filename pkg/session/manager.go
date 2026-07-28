@@ -63,6 +63,14 @@ type SessionManager struct {
 	catchupManager     *catchup.Manager
 	nameResolver       func(streamID string) (string, bool) // optional channel-name lookup for logs
 
+	// Error slate: when the upstream fails before delivering a byte, live
+	// viewers are shown a rendered explanation instead of a dropped connection,
+	// while the pump keeps retrying the provider. slateProvider is nil when the
+	// feature is disabled or ffmpeg is unavailable.
+	slateProvider SlateProvider
+	errorCatalog  *Catalog
+	slateRetryMax time.Duration
+
 	// pauseGrace controls how long a catchup-enabled live stream keeps its
 	// upstream connection (and disk recording) alive after its last viewer
 	// disconnects, so a TiviMate "pause" followed by a timeshift-based resume
@@ -146,6 +154,40 @@ type StreamBuffer struct {
 	// without opening any additional connection to the provider.
 	probeTaps     []*probeTap
 	probeTapsLock sync.Mutex
+
+	// ready is closed once the pump knows whether the upstream came up, so the
+	// HTTP handler can decide what to send before it commits to a 200. startErr
+	// is nil on success and set when the upstream failed before delivering any
+	// byte. slateOK records whether this stream type may be replaced by an error
+	// slate (live/timeshift only — VOD is served over byte ranges).
+	ready      chan struct{}
+	readyOnce  sync.Once
+	startErrMu sync.Mutex
+	startErr   *UpstreamError
+	slateOK    bool
+}
+
+// markReady records the upstream outcome and releases anyone waiting on Ready.
+// Only the first call counts: later transitions (e.g. a mid-stream failure) must
+// not retroactively change what the handler already decided.
+func (b *StreamBuffer) markReady(err *UpstreamError) {
+	b.readyOnce.Do(func() {
+		b.startErrMu.Lock()
+		b.startErr = err
+		b.startErrMu.Unlock()
+		close(b.ready)
+	})
+}
+
+// Ready returns a channel closed once the upstream outcome is known.
+func (b *StreamBuffer) Ready() <-chan struct{} { return b.ready }
+
+// StartError returns the upstream failure recorded before any byte was
+// delivered, or nil if the stream started successfully.
+func (b *StreamBuffer) StartError() *UpstreamError {
+	b.startErrMu.Lock()
+	defer b.startErrMu.Unlock()
+	return b.startErr
 }
 
 // probeTap collects up to maxBytes of upstream data fed to it by the pump, then
@@ -512,6 +554,8 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 		active:      true,
 		clients:     map[string]*streamClient{username: newStreamClient()},
 		stopChan:    make(chan struct{}),
+		ready:       make(chan struct{}),
+		slateOK:     slateEligible(streamType),
 	}
 
 	// Start local disk buffer for live streams when catchup is enabled
@@ -586,37 +630,39 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 		cancel()
 	}()
 
-	// Bind the upstream request to the cancelable context
-	req, err := http.NewRequestWithContext(ctx, "GET", upstreamURL.String(), nil)
-	if err != nil {
-		utils.ErrorLog("Failed to create request: %v", err)
-		return
+	// Dial the upstream. dialUpstream sets the same headers as before: never
+	// inject Range, so the upstream returns a natural 200 with Content-Length
+	// rather than a 206 that may lack a Content-Range total (which causes
+	// avformat errors in media players). 200 and 206 are both accepted, since
+	// some providers return 206 unconditionally.
+	resp, uerr := sm.dialUpstream(ctx, upstreamURL)
+
+	// Release the HTTP handler waiting to learn whether this stream came up, so
+	// it can choose a response before committing to a 200.
+	buffer.markReady(uerr)
+
+	if uerr != nil {
+		utils.ErrorLog("Upstream failed for %s: %s", sm.streamLabel(buffer.streamID), uerr.Error())
+
+		if !sm.slateEnabled(buffer) {
+			sm.stopStreamLocking(buffer.streamID)
+			return
+		}
+		// Show the viewer what went wrong and keep retrying the provider. This
+		// returns a live response only if the upstream came back.
+		if resp = sm.serveSlateAndRetry(ctx, buffer, upstreamURL, uerr); resp == nil {
+			sm.stopStreamLocking(buffer.streamID)
+			return
+		}
 	}
 
-	// Set common headers; never inject Range — let the upstream return a natural 200
-	// with Content-Length so clients can seek. Injecting bytes=0- forces a 206 response
-	// which may lack a Content-Range total and causes avformat errors in media players.
-	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", utils.GetLanguageHeader())
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Connection", "keep-alive")
-
-	resp, err := sm.httpClient.Do(req)
-	if err != nil {
-		utils.ErrorLog("Failed to connect to upstream: %v", err)
-		sm.stopStreamLocking(buffer.streamID)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Accept 200 (expected) and 206 (some providers return it unconditionally).
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		utils.ErrorLog("Upstream returned status %d for %s",
-			resp.StatusCode, sm.streamLabel(buffer.streamID))
-		sm.stopStreamLocking(buffer.streamID)
-		return
-	}
+	// resp is reassigned when a slate retry succeeds, so close whatever is
+	// current at return rather than capturing the original.
+	defer func() {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 
 	// The buffer was created active; the pump does not flip the flag itself so
 	// that every read/write of buffer.active stays under sm.streamLock.
@@ -888,6 +934,12 @@ func (sm *SessionManager) stopStream(streamID string) {
 	// Signal the upstream pump to stop (Once prevents double-close panic)
 	buffer.stopOnce.Do(func() { close(buffer.stopChan) })
 	buffer.active = false
+
+	// Release any handler still waiting to learn whether this stream came up.
+	// Normally the pump has already marked it ready and this is a no-op; it only
+	// matters when a stream is torn down before the upstream dial finished, where
+	// otherwise the handler would block until its own timeout.
+	buffer.markReady(&UpstreamError{Key: KeyUnreachable})
 
 	// Signal every client's HTTP handler to finish
 	buffer.clientsLock.Lock()

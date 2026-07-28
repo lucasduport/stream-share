@@ -87,6 +87,12 @@ type ProxyConfig struct {
 	CatchupDurationHours     int
 	CatchupPauseGraceMinutes int
 
+	// Error slate configuration: on upstream failure, show the reason on screen
+	// instead of dropping the stream. Requires ffmpeg in the image.
+	ErrorSlateEnabled         bool
+	ErrorSlateRetryMaxMinutes int
+	ErrorSlateMessagesFile    string
+
 	// Session / stream timeout configuration
 	SessionTimeoutMinutes        int
 	StreamTimeoutMinutes         int

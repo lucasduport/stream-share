@@ -66,6 +66,19 @@ services:
       TEMP_LINK_HOURS: "24"            # Temporary download link expiration in hours
       MULTIPLEX_STALL_TIMEOUT_SECONDS: "30"  # Drop a multiplexed viewer whose buffer stalls this long (protects co-viewers)
 
+      # Error slate — when the provider fails before a live stream starts, show the
+      # reason on screen instead of dropping the connection, and keep retrying the
+      # provider behind the slate. Needs ffmpeg + ttf-dejavu (both in the image);
+      # without them this silently falls back to the old drop behaviour.
+      ERROR_SLATE_ENABLED: "true"           # Show upstream errors as an on-screen slate
+      ERROR_SLATE_RETRY_MAX_MINUTES: "10"   # Keep retrying upstream behind the slate for this long
+      # Optional JSON file customising the message per error code. The slate shows the
+      # code, its official meaning, and your message. Only "message" is usually needed —
+      # the meaning falls back to the standard HTTP text. Applied at startup.
+      #   {"403": {"message": "Check your subscription."},
+      #    "456": {"meaning": "Connection limit", "message": "All slots in use."}}
+      # ERROR_SLATE_MESSAGES_FILE: "/root/error-messages.json"
+
       # Caching (single root; subfolders are created internally: <root>/vod and <root>/catchup)
       VOD_CACHE_ENABLED: "true"          # Enable on-demand VOD caching
       CACHE_FOLDER: "/cache"           # Root cache folder — VOD files go in /cache/vod, catchup buffers in /cache/catchup

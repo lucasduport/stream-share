@@ -39,12 +39,19 @@ import (
 	"github.com/lucasduport/stream-share/pkg/database"
 	"github.com/lucasduport/stream-share/pkg/discord"
 	"github.com/lucasduport/stream-share/pkg/session"
+	"github.com/lucasduport/stream-share/pkg/slate"
 	"github.com/lucasduport/stream-share/pkg/utils"
 	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
 	uuid "github.com/satori/go.uuid"
 
 	"github.com/gin-gonic/gin"
 )
+
+// upstreamReadyTimeout bounds how long a viewer waits for the provider to
+// answer before we give up and return a status. It has to stay tight: this sits
+// in the channel-zap path, so a generous value makes every start feel sluggish
+// when the provider is slow.
+const upstreamReadyTimeout = 8 * time.Second
 
 var defaultProxyfiedM3UPath = filepath.Join(os.TempDir(), uuid.NewV4().String()+".stream-share.m3u")
 var endpointAntiColision = strings.Split(uuid.NewV4().String(), "-")[0]
@@ -172,6 +179,32 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		serverConfig.sessionManager.SetPauseGrace(time.Duration(catchupPauseGrace) * time.Minute)
 		if catchupEnabled && catchupPauseGrace > 0 {
 			utils.InfoLog("Bootstrap: catchup pause grace set to %d minute(s) — paused live streams keep recording for seamless resume", catchupPauseGrace)
+		}
+	}
+
+	// Error slate: show viewers why a live stream failed instead of dropping the
+	// connection, and keep retrying the provider behind the slate. Requires
+	// ffmpeg; when it is missing the generator reports unavailable and the
+	// session manager silently keeps the previous drop behavior, so older images
+	// are unaffected by the default being on.
+	if serverConfig.sessionManager != nil {
+		slateRetry := 10
+		if config.ErrorSlateRetryMaxMinutes > 0 {
+			slateRetry = config.ErrorSlateRetryMaxMinutes
+		}
+		serverConfig.sessionManager.SetErrorCatalog(session.LoadCatalog(config.ErrorSlateMessagesFile))
+
+		if config.ErrorSlateEnabled {
+			gen := slate.New(utils.SlateCacheDir())
+			serverConfig.sessionManager.SetSlateProvider(gen)
+			serverConfig.sessionManager.SetSlateRetryMax(time.Duration(slateRetry) * time.Minute)
+			if gen.Available() {
+				utils.InfoLog("Bootstrap: error slates ENABLED (retry up to %d minute(s) before giving up)", slateRetry)
+			} else {
+				utils.WarnLog("Bootstrap: error slates requested but ffmpeg is unavailable; streams will drop on upstream failure as before")
+			}
+		} else {
+			utils.InfoLog("Bootstrap: error slates DISABLED (set ERROR_SLATE_ENABLED=true to show upstream errors on screen)")
 		}
 	}
 
@@ -589,6 +622,40 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	}
 	doneChan, _ := c.sessionManager.GetClientDone(streamID, username)
 	clientGone := ctx.Request.Context().Done()
+
+	// Wait until the pump knows whether the upstream actually came up, before we
+	// commit to a 200. Historically RequestStream returned before the provider
+	// was ever contacted, so a 403 or dial timeout could only ever surface as an
+	// unexplained mid-body disconnect. A co-viewer joining a healthy stream sees
+	// an already-closed channel here and does not wait.
+	if buffer != nil {
+		select {
+		case <-buffer.Ready():
+			if startErr := buffer.StartError(); startErr != nil {
+				// The session manager serves an error slate for eligible live
+				// streams; the bytes arrive on dataChan like any other content,
+				// so fall through. Anything else keeps the old behavior, except
+				// the status is now genuinely reachable before the first byte.
+				if !c.sessionManager.ServesSlateFor(streamID) {
+					utils.WarnLog("Multiplex: upstream failed for %s (user=%s): %s",
+						label, username, startErr.Error())
+					c.sessionManager.RemoveClient(streamID, username)
+					ctx.AbortWithStatus(http.StatusBadGateway)
+					return
+				}
+			}
+		case <-time.After(upstreamReadyTimeout):
+			utils.WarnLog("Multiplex: upstream did not respond within %s for %s (user=%s)",
+				upstreamReadyTimeout, label, username)
+			c.sessionManager.RemoveClient(streamID, username)
+			ctx.AbortWithStatus(http.StatusGatewayTimeout)
+			return
+		case <-clientGone:
+			utils.DebugLog("Multiplex: client %s left before %s started", username, label)
+			c.sessionManager.RemoveClient(streamID, username)
+			return
+		}
+	}
 
 	// Set content-type and disable intermediary buffering
 	setNoBufferingHeaders(ctx, contentTypeForPath(targetURL.Path))
