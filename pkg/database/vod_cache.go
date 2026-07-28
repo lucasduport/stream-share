@@ -91,10 +91,15 @@ func (m *DBManager) UpdateVODProgress(streamID string, downloaded, total int64) 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// $3 is cast explicitly. Postgres infers a parameter's type from its context,
+	// and comparing it against the untyped literal 0 resolves it to integer — so
+	// any file over 2GB overflowed and aborted the whole statement, leaving
+	// progress frozen for exactly the downloads long enough to care about. $2
+	// needs no cast because assigning straight to a bigint column already pins it.
 	_, err := m.db.ExecContext(ctx, `
         UPDATE vod_cache
-           SET downloaded_bytes = $2,
-               total_bytes = CASE WHEN $3 <> 0 THEN $3 ELSE total_bytes END,
+           SET downloaded_bytes = $2::bigint,
+               total_bytes = CASE WHEN $3::bigint <> 0 THEN $3::bigint ELSE total_bytes END,
                last_access = CURRENT_TIMESTAMP
          WHERE stream_id = $1`, streamID, downloaded, total)
 	return err

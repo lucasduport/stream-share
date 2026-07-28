@@ -89,3 +89,49 @@ func TestUpdateVODProgressKeepsTotalWhenUnknown(t *testing.T) {
 		t.Fatalf("got (%d,%d), want (100,500)", d, tot)
 	}
 }
+
+// TestUpdateVODProgressHandlesLargeFiles guards a parameter-type-inference trap.
+//
+// Postgres infers a parameter's type from context. In "CASE WHEN $3 <> 0", the
+// untyped literal 0 resolved $3 to integer even though total_bytes is BIGINT, so
+// any file over 2GB overflowed and aborted the whole statement — freezing
+// progress for exactly the downloads big enough to matter. The values here are
+// from a real 5.1GB movie.
+func TestUpdateVODProgressHandlesLargeFiles(t *testing.T) {
+	m := freshVODDB(t)
+	exp := time.Now().Add(24 * time.Hour)
+	if err := m.UpsertVODCache(&types.VODCacheEntry{
+		StreamID: "big", Status: "downloading", FilePath: "/big.mkv", ExpiresAt: exp,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const totalBytes int64 = 5_127_667_944 // > math.MaxInt32
+	const doneBytes int64 = 3_000_000_000  // also > math.MaxInt32
+
+	if err := m.UpdateVODProgress("big", doneBytes, totalBytes); err != nil {
+		t.Fatalf("large-file progress update failed: %v", err)
+	}
+	if d, tot := progress(t, m, "big"); d != doneBytes || tot != totalBytes {
+		t.Fatalf("got (%d,%d), want (%d,%d)", d, tot, doneBytes, totalBytes)
+	}
+}
+
+// TestUpsertVODCacheHandlesLargeFiles covers the same size range through the
+// upsert path, so a future edit to its conflict clause cannot reintroduce this.
+func TestUpsertVODCacheHandlesLargeFiles(t *testing.T) {
+	m := freshVODDB(t)
+	exp := time.Now().Add(24 * time.Hour)
+	const totalBytes int64 = 8_000_000_000
+
+	if err := m.UpsertVODCache(&types.VODCacheEntry{
+		StreamID: "huge", Status: "ready", FilePath: "/huge.mkv",
+		DownloadedBytes: totalBytes, TotalBytes: totalBytes, SizeBytes: totalBytes,
+		ExpiresAt: exp,
+	}); err != nil {
+		t.Fatalf("large-file upsert failed: %v", err)
+	}
+	if d, tot := progress(t, m, "huge"); d != totalBytes || tot != totalBytes {
+		t.Fatalf("got (%d,%d), want (%d,%d)", d, tot, totalBytes, totalBytes)
+	}
+}
