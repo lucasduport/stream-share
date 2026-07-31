@@ -1,6 +1,6 @@
 services:
   stream-share:
-    image: x3n0n10/stream-share:latest
+    image: ghcr.io/x3n0n10/stream-share:latest
     restart: unless-stopped
     ports:
       - "8080:8080"

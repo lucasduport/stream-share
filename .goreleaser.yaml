@@ -44,8 +44,6 @@ dockers:
   - image_templates:
     - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-arm64"
     - "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest-arm64{{ end }}"
-    - "x3n0n10/stream-share:{{ .Tag }}-arm64"
-    - "{{ if not .Prerelease }}x3n0n10/stream-share:latest-arm64{{ end }}"
     use: buildx
     goos: linux
     goarch: arm64
@@ -53,6 +51,7 @@ dockers:
     - stream-share
     build_flag_templates:
     - "--platform=linux/arm64/v8"
+    - "--label=org.opencontainers.image.source=https://github.com/x3n0n10/stream-share"
     - "--label=org.opencontainers.image.created={{.Date}}"
     - "--label=org.opencontainers.image.name={{.ProjectName}}"
     - "--label=org.opencontainers.image.revision={{.FullCommit}}"
@@ -63,8 +62,6 @@ dockers:
   - image_templates:
     - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-amd64"
     - "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest-amd64{{ end }}"
-    - "x3n0n10/stream-share:{{ .Tag }}-amd64"
-    - "{{ if not .Prerelease }}x3n0n10/stream-share:latest-amd64{{ end }}"
     use: buildx
     goos: linux
     goarch: amd64
@@ -72,6 +69,7 @@ dockers:
     - stream-share
     build_flag_templates:
     - "--platform=linux/amd64"
+    - "--label=org.opencontainers.image.source=https://github.com/x3n0n10/stream-share"
     - "--label=org.opencontainers.image.created={{.Date}}"
     - "--label=org.opencontainers.image.name={{.ProjectName}}"
     - "--label=org.opencontainers.image.revision={{.FullCommit}}"
@@ -80,15 +78,6 @@ dockers:
     dockerfile: .Dockerfile.goreleaser
 
 docker_manifests:
-  - name_template: "x3n0n10/stream-share:{{ .Tag }}"
-    image_templates:
-      - "x3n0n10/stream-share:{{ .Tag }}-amd64"
-      - "x3n0n10/stream-share:{{ .Tag }}-arm64"
-  - name_template: "{{ if not .Prerelease }}x3n0n10/stream-share:latest{{ end }}"
-    image_templates:
-      - "x3n0n10/stream-share:latest-amd64"
-      - "x3n0n10/stream-share:latest-arm64"
-    skip_push: "{{ if .Prerelease }}true{{ end }}"
   - name_template: "ghcr.io/x3n0n10/stream-share:{{ .Tag }}"
     image_templates:
       - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-amd64"

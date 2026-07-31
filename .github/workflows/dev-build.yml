@@ -32,14 +32,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GHCR_TOKEN }}
-
-      - name: Log in to Docker Hub
-        if: inputs.push_image
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set short SHA
         run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
@@ -50,7 +43,7 @@ jobs:
           docker buildx build \
             --platform linux/amd64 \
             --file .Dockerfile.goreleaser \
-            --tag x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
+            --label org.opencontainers.image.source=https://github.com/x3n0n10/stream-share \
             --tag ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
             ${{ inputs.push_image && '--push' || '--load' }} \
             .
@@ -61,7 +54,7 @@ jobs:
           docker buildx build \
             --platform linux/arm64 \
             --file .Dockerfile.goreleaser \
-            --tag x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-arm64 \
+            --label org.opencontainers.image.source=https://github.com/x3n0n10/stream-share \
             --tag ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-arm64 \
             ${{ inputs.push_image && '--push' || '--load' }} \
             .
@@ -69,11 +62,6 @@ jobs:
       - name: Create and push multi-arch manifests
         if: inputs.push_image
         run: |
-          docker buildx imagetools create \
-            -t x3n0n10/stream-share:dev-${{ env.SHORT_SHA }} \
-            -t x3n0n10/stream-share:dev \
-            x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
-            x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-arm64
           docker buildx imagetools create \
             -t ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }} \
             -t ghcr.io/x3n0n10/stream-share:dev \
