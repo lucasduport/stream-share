@@ -137,6 +137,7 @@ It supports:
 			ErrorSlateEnabled:         viper.GetBool("error-slate-enabled"),
 			ErrorSlateRetryMaxMinutes: viper.GetInt("error-slate-retry-max-minutes"),
 			ErrorSlateMessagesFile:    viper.GetString("error-slate-messages-file"),
+			SlateCacheStaleHours:      viper.GetInt("slate-cache-stale-hours"),
 
 			// Session / stream timeouts
 			SessionTimeoutMinutes:        viper.GetInt("session-timeout-minutes"),

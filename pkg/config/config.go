@@ -95,6 +95,10 @@ type ProxyConfig struct {
 	ErrorSlateEnabled         bool
 	ErrorSlateRetryMaxMinutes int
 	ErrorSlateMessagesFile    string
+	// SlateCacheStaleHours prunes rendered slate clips not modified within this
+	// many hours (they are regenerated on demand). 0 uses the built-in default;
+	// a negative value disables pruning.
+	SlateCacheStaleHours int
 
 	// Session / stream timeout configuration
 	SessionTimeoutMinutes        int

@@ -35,6 +35,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lucasduport/stream-share/pkg/catchup"
 	"github.com/lucasduport/stream-share/pkg/database"
+	"github.com/lucasduport/stream-share/pkg/slate"
 	"github.com/lucasduport/stream-share/pkg/types"
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
@@ -57,6 +58,8 @@ type SessionManager struct {
 	streamTimeout      time.Duration
 	tempLinkTimeout    time.Duration
 	vodCacheStaleAge   time.Duration
+	slateCacheDir      string        // dir holding rendered slate clips; "" disables slate pruning
+	slateStaleAge      time.Duration // prune slate clips not modified within this; 0 disables
 	clientStallTimeout time.Duration // drop a multiplexed client whose buffer stays full this long
 	httpClient         *http.Client
 	stopChan           chan struct{} // closed by Stop() to terminate background goroutines
@@ -316,6 +319,13 @@ func (sm *SessionManager) cleanupRoutine() {
 	cacheTicker := time.NewTicker(sm.cleanupInterval)
 	defer cacheTicker.Stop()
 
+	// Run cache maintenance shortly after startup as well as on the daily ticker,
+	// so a container that restarts more often than once a day is not left with an
+	// ever-growing cache. The short delay lets bootstrap finish applying config
+	// (stale ages, slate dir) before the first pass.
+	initial := time.NewTimer(30 * time.Second)
+	defer initial.Stop()
+
 	for {
 		select {
 		case <-sm.stopChan:
@@ -323,21 +333,35 @@ func (sm *SessionManager) cleanupRoutine() {
 		case <-sessionTicker.C:
 			sm.cleanupExpiredSessions()
 			sm.cleanupUnusedStreams()
+		case <-initial.C:
+			sm.runCacheMaintenance()
 		case <-cacheTicker.C:
-			if sm.db != nil {
-				// Remove temporary links past their expiry date
-				if count, err := sm.db.CleanupExpiredLinks(); err != nil {
-					utils.ErrorLog("Failed to clean expired links: %v", err)
-				} else if count > 0 {
-					utils.InfoLog("Cleaned %d expired temporary links", count)
-				}
-				// Remove DB rows whose expires_at has passed
-				if _, err := sm.db.CleanupExpiredCache(); err != nil {
-					utils.ErrorLog("Failed to clean expired VOD cache entries: %v", err)
-				}
-				// Delete files (and their DB rows) not accessed within the stale age
-				sm.cleanupStaleVODFiles()
-			}
+			sm.runCacheMaintenance()
+		}
+	}
+}
+
+// runCacheMaintenance reaps everything that accumulates on disk: expired temp
+// links, expired and stale VOD cache files (plus their .part siblings), orphaned
+// VOD files no longer referenced by any row, and stale slate clips.
+func (sm *SessionManager) runCacheMaintenance() {
+	if sm.db != nil {
+		if count, err := sm.db.CleanupExpiredLinks(); err != nil {
+			utils.ErrorLog("Failed to clean expired links: %v", err)
+		} else if count > 0 {
+			utils.InfoLog("Cleaned %d expired temporary links", count)
+		}
+		// Order matters: delete expired/stale entries' files *before* their rows,
+		// then reap anything left unreferenced (e.g. failed downloads' .part files).
+		sm.cleanupExpiredVODFiles()
+		sm.cleanupStaleVODFiles()
+		sm.reapVODOrphans()
+	}
+	if sm.slateStaleAge > 0 && sm.slateCacheDir != "" {
+		if n, err := slate.PruneCache(sm.slateCacheDir, sm.slateStaleAge); err != nil {
+			utils.WarnLog("Slate cache prune failed: %v", err)
+		} else if n > 0 {
+			utils.InfoLog("Pruned %d stale slate clip(s)", n)
 		}
 	}
 }
@@ -1371,6 +1395,59 @@ func (sm *SessionManager) SetClientStallTimeout(d time.Duration) {
 	}
 }
 
+// SetSlateCache configures pruning of the on-disk slate clip cache: clips not
+// modified within age are deleted (they are regenerated on demand). An empty dir
+// or a non-positive age disables pruning.
+func (sm *SessionManager) SetSlateCache(dir string, age time.Duration) {
+	sm.slateCacheDir = dir
+	sm.slateStaleAge = age
+}
+
+// vodCacheContains reports whether path is safely inside the VOD cache directory,
+// guarding every deletion against a stray absolute path in a DB row.
+func vodCacheContains(cacheDir, path string) bool {
+	return strings.HasPrefix(filepath.Clean(path), cacheDir+string(os.PathSeparator))
+}
+
+// removeVODFile deletes a cached VOD media file and its sibling ".part" (left by
+// an interrupted download), but only when they live inside the cache directory.
+func removeVODFile(cacheDir, path string) {
+	if path == "" {
+		return
+	}
+	if !vodCacheContains(cacheDir, path) {
+		utils.WarnLog("Refusing to delete out-of-cache-dir path: %s", path)
+		return
+	}
+	for _, p := range []string{path, path + ".part"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			utils.WarnLog("Could not delete VOD file %s: %v", p, err)
+		}
+	}
+}
+
+// cleanupExpiredVODFiles removes entries whose expires_at has passed, deleting
+// the file (and its .part sibling) before the DB row so expiry never orphans a
+// file. Unlike the stale sweep this spans every status, so an expired failed or
+// in-progress entry is cleaned up too.
+func (sm *SessionManager) cleanupExpiredVODFiles() {
+	cacheDir := filepath.Clean(utils.VODCacheDir())
+	entries, err := sm.db.GetExpiredVODCache()
+	if err != nil {
+		utils.ErrorLog("Failed to query expired VOD cache: %v", err)
+		return
+	}
+	for _, e := range entries {
+		removeVODFile(cacheDir, e.FilePath)
+		if err := sm.db.DeleteVODCacheEntry(e.StreamID); err != nil {
+			utils.ErrorLog("Failed to remove expired VOD cache row for %s: %v", e.StreamID, err)
+		}
+	}
+	if len(entries) > 0 {
+		utils.InfoLog("Removed %d expired VOD cache entry(ies)", len(entries))
+	}
+}
+
 // cleanupStaleVODFiles deletes cached VOD files (and their DB rows) that have
 // not been accessed within vodCacheStaleAge. In-progress downloads are skipped.
 func (sm *SessionManager) cleanupStaleVODFiles() {
@@ -1383,18 +1460,63 @@ func (sm *SessionManager) cleanupStaleVODFiles() {
 		return
 	}
 	for _, e := range entries {
-		// Safety: only delete files that are inside the expected cache directory.
-		if !strings.HasPrefix(filepath.Clean(e.FilePath), cacheDir+string(os.PathSeparator)) {
-			utils.WarnLog("Refusing to delete out-of-cache-dir path: %s", e.FilePath)
-			continue
-		}
-		if err := os.Remove(e.FilePath); err != nil && !os.IsNotExist(err) {
-			utils.WarnLog("Could not delete stale VOD file %s: %v", e.FilePath, err)
-		}
+		removeVODFile(cacheDir, e.FilePath)
 		if err := sm.db.DeleteVODCacheEntry(e.StreamID); err != nil {
 			utils.ErrorLog("Failed to remove stale VOD cache row for %s: %v", e.StreamID, err)
 		} else {
 			utils.InfoLog("Removed stale VOD cache entry %s (last accessed %s ago)", e.StreamID, utils.HumanDuration(time.Since(e.LastAccess)))
 		}
+	}
+}
+
+// reapVODOrphans removes files in the VOD cache directory that no row references,
+// plus leftover ".part" files from failed or interrupted downloads. It only
+// deletes files idle for at least vodCacheStaleAge: an active download writes its
+// ".part" continuously, so the mtime grace keeps a live transfer safe while a
+// dead one eventually ages past the threshold.
+func (sm *SessionManager) reapVODOrphans() {
+	cacheDir := filepath.Clean(utils.VODCacheDir())
+	dirEntries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			utils.WarnLog("VOD orphan sweep: cannot read %s: %v", cacheDir, err)
+		}
+		return
+	}
+	known, err := sm.db.ListVODCacheFilePaths()
+	if err != nil {
+		utils.ErrorLog("VOD orphan sweep: cannot list referenced files: %v", err)
+		return
+	}
+	cutoff := time.Now().Add(-sm.vodCacheStaleAge)
+	removed := 0
+	for _, de := range dirEntries {
+		if de.IsDir() {
+			continue
+		}
+		full := filepath.Join(cacheDir, de.Name())
+		// A finished media file referenced by a row is governed by that row's
+		// expiry/staleness, not this sweep. ".part" files are never referenced
+		// (rows track the final path), so they always fall through to the age check.
+		if !strings.HasSuffix(de.Name(), ".part") {
+			if _, ok := known[full]; ok {
+				continue
+			}
+		}
+		info, err := de.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			continue // too fresh — may be an active download or a just-written file
+		}
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			utils.WarnLog("VOD orphan sweep: could not delete %s: %v", full, err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		utils.InfoLog("VOD orphan sweep: removed %d unreferenced file(s)", removed)
 	}
 }

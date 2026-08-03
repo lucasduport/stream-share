@@ -167,6 +167,37 @@ func (g *Generator) Clip(v View) (string, error) {
 	return out, nil
 }
 
+// PruneCache removes cached slate clips whose modification time is older than
+// maxAge. Slates are keyed by error and re-rendered on demand, so pruning is
+// always safe — a still-relevant clip is simply regenerated the next time that
+// error occurs. A missing directory is not an error.
+func PruneCache(dir string, maxAge time.Duration) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".ts") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			if err := os.Remove(filepath.Join(dir, e.Name())); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
+}
+
 // render shells out to ffmpeg. Arguments are passed as a slice (never through a
 // shell) and every interpolated string has been sanitized by the caller.
 func (g *Generator) render(out, code, meaning, message, channel string) error {

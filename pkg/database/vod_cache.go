@@ -116,22 +116,62 @@ func (m *DBManager) TouchVODCache(streamID string) error {
 	return err
 }
 
-// CleanupExpiredCache deletes expired rows
-func (m *DBManager) CleanupExpiredCache() (int64, error) {
+// GetExpiredVODCache returns entries whose expires_at has passed, across every
+// status. Callers delete the on-disk file (and its .part sibling) before the row
+// so expiry never orphans a file — which the old DB-only delete did.
+func (m *DBManager) GetExpiredVODCache() ([]types.VODCacheEntry, error) {
 	if m == nil || m.db == nil {
-		return 0, fmt.Errorf("database not initialized")
+		return nil, fmt.Errorf("database not initialized")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	res, err := m.db.ExecContext(ctx, `DELETE FROM vod_cache WHERE expires_at < CURRENT_TIMESTAMP`)
+	rows, err := m.db.QueryContext(ctx, `SELECT stream_id, file_path
+        FROM vod_cache WHERE expires_at < CURRENT_TIMESTAMP`)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n, _ := res.RowsAffected()
-	if n > 0 {
-		utils.InfoLog("Cleaned up %d expired vod_cache entries", n)
+	defer func() { _ = rows.Close() }()
+	var list []types.VODCacheEntry
+	for rows.Next() {
+		var e types.VODCacheEntry
+		if err := rows.Scan(&e.StreamID, &e.FilePath); err != nil {
+			return nil, err
+		}
+		list = append(list, e)
 	}
-	return n, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// ListVODCacheFilePaths returns the set of non-empty file paths referenced by any
+// cache row, so an orphan sweep can tell tracked files from stray ones.
+func (m *DBManager) ListVODCacheFilePaths() (map[string]struct{}, error) {
+	if m == nil || m.db == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := m.db.QueryContext(ctx, `SELECT file_path FROM vod_cache WHERE file_path <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	paths := make(map[string]struct{})
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		if p != "" {
+			paths[p] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 // GetStaleVODCache returns ready entries whose last_access is older than threshold.

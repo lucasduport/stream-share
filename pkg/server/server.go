@@ -264,6 +264,16 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 			serverConfig.sessionManager.SetVODCacheStaleAge(time.Duration(hours) * time.Hour)
 			utils.InfoLog("VOD cache stale age set to %d hours", hours)
 		}
+		// Prune the on-disk slate clip cache too (clips are regenerated on demand).
+		// This runs regardless of ErrorSlateEnabled so leftover clips are cleaned up
+		// even after the feature is turned off. 0 = default 7 days; negative disables.
+		if hours := config.SlateCacheStaleHours; hours >= 0 {
+			if hours == 0 {
+				hours = 168
+			}
+			serverConfig.sessionManager.SetSlateCache(utils.SlateCacheDir(), time.Duration(hours)*time.Hour)
+			utils.InfoLog("Slate cache stale age set to %d hours", hours)
+		}
 		if secs := config.MultiplexStallTimeoutSeconds; secs > 0 {
 			serverConfig.sessionManager.SetClientStallTimeout(time.Duration(secs) * time.Second)
 			utils.InfoLog("Multiplex client stall timeout set to %d seconds", secs)
@@ -406,7 +416,17 @@ func (c *Config) Serve() error {
 		defer c.discordBot.Stop()
 	}
 
-	router := gin.Default()
+	// gin.New() rather than gin.Default(): the default access logger logs every
+	// request, which drowns the log in noise from the frequently-polled /healthz
+	// and internal API endpoints. Log only failures (>= 400) unless debug logging
+	// is on, in which case fall back to the full access log.
+	router := gin.New()
+	if utils.IsDebugLogEnabled() {
+		router.Use(gin.Logger())
+	} else {
+		router.Use(quietRequestLogger())
+	}
+	router.Use(gin.Recovery())
 	router.Use(cors.Default())
 	utils.InfoLog("Setting up routes and internal API...")
 
@@ -444,6 +464,32 @@ func (c *Config) Serve() error {
 	// Add a message to indicate the server is ready
 	utils.InfoLog("[stream-share] Server is ready and listening on :%d", c.HostConfig.Port)
 	return router.Run(fmt.Sprintf(":%d", c.HostConfig.Port))
+}
+
+// quietRequestLogger logs only failed HTTP requests (status >= 400), keeping the
+// success flood — health checks, internal API polling — out of the log. Requests
+// it does log go through the project logger at a severity matching their status.
+func quietRequestLogger() gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		start := time.Now()
+		ctx.Next()
+
+		status := ctx.Writer.Status()
+		if status < 400 {
+			return
+		}
+		path := ctx.Request.URL.Path
+		if raw := ctx.Request.URL.RawQuery; raw != "" {
+			path = path + "?" + raw
+		}
+		msg := fmt.Sprintf("[HTTP] %d | %v | %s | %s %q",
+			status, time.Since(start), ctx.ClientIP(), ctx.Request.Method, path)
+		if status >= 500 {
+			utils.ErrorLog("%s", msg)
+		} else {
+			utils.WarnLog("%s", msg)
+		}
+	}
 }
 
 // Add direct streaming routes with proxy credentials

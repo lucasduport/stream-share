@@ -103,11 +103,19 @@ services:
       #   {"403": {"message": "Check your subscription."},
       #    "456": {"meaning": "Connection limit", "message": "All slots in use."}}
       # ERROR_SLATE_MESSAGES_FILE: "/root/error-messages.json"
+      # Rendered slate clips are cached on disk (in <root>/slate) and reused. They
+      # are pruned when not modified within this many hours; regenerated on demand.
+      # 0 uses the default (168 = 7 days); a negative value disables pruning.
+      SLATE_CACHE_STALE_HOURS: "168"
 
       # Caching (single root; subfolders are created internally: <root>/vod and <root>/catchup)
       VOD_CACHE_ENABLED: "true"          # Enable on-demand VOD caching
       CACHE_FOLDER: "/cache"           # Root cache folder — VOD files go in /cache/vod, catchup buffers in /cache/catchup
-      VOD_CACHE_STALE_HOURS: "24"      # Delete cached VOD files not accessed for this many hours
+      # Delete cached VOD files not accessed for this many hours. The sweep also
+      # removes files whose entry has expired, orphaned files no longer tracked in
+      # the database, and leftover ".part" files from failed downloads. It runs
+      # shortly after startup and daily thereafter.
+      VOD_CACHE_STALE_HOURS: "24"
 
       # Local Catchup Buffering
       TZ: "Europe/Amsterdam"           # Timezone — MUST match the timezone of your IPTV clients (TiviMate sends local time)
