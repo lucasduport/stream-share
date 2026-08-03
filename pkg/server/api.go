@@ -90,6 +90,10 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 	// Status summary for Discord and dashboards
 	api.GET("/status", c.statusSummary)
 
+	// Force a fresh provider health probe (rate-limited). Meant for an external
+	// VPN watchdog to test a new egress IP right after reconnecting.
+	api.GET("/health", c.healthProbe)
+
 	// Watch history endpoints (used by Discord and dashboards)
 	api.GET("/history", c.getHistoryFeed)
 	api.GET("/history/:username", c.getUserHistory)

@@ -1,0 +1,84 @@
+# Example: wiring stream-share behind a VPN with an external watchdog.
+#
+# This is a SNIPPET to fold into your own stack, not a standalone file. It shows
+# the recommended topology:
+#
+#   vpn              -> holds the VPN tunnel and a control server on :8000
+#   stream-share     -> shares the VPN's network namespace, reports provider health
+#   vpn-watchdog     -> reads that health and reconnects the VPN when we're blocked
+#
+# stream-share never references the VPN; only the watchdog knows about it. gluetun
+# is used below purely as a concrete example — any VPN with a controllable
+# reconnect works; adapt the watchdog's cycle_vpn() accordingly.
+
+services:
+  # Example VPN container: gluetun. Substitute your own if you use a different one.
+  gluetun:
+    image: qmcgaw/gluetun
+    cap_add:
+      - NET_ADMIN
+    environment:
+      # ... your VPN provider settings ...
+      # Enable the control server the watchdog talks to:
+      HTTP_CONTROL_SERVER_ADDRESS: ":8000"
+      # Protect it with EITHER an API key OR HTTP Basic Auth (gluetun's roles
+      # config), and set the matching GLUETUN_* vars on the watchdog below.
+    ports:
+      - "8080:8080"   # publish stream-share's port HERE (it shares this netns)
+    restart: unless-stopped
+
+  stream-share:
+    image: ghcr.io/x3n0n10/stream-share:latest
+    # Share gluetun's network stack so all provider traffic egresses via the VPN.
+    # Note: with network_mode you cannot also set `ports:` here — publish them on
+    # the gluetun service (above) instead.
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      # ... your usual stream-share settings (see the main docker-compose.yml) ...
+      HEALTHCHECK_ENABLED: "true"
+      HEALTHCHECK_STREAM_ID: "12345"       # a real live channel id from your provider
+      # Leave HEALTHCHECK_TIMES EMPTY when running the watchdog below: the watchdog
+      # forces a fresh probe on its own schedule (CHECK_TIMES) via the internal API,
+      # and that probe also refreshes /healthz — so a second self-probe schedule
+      # here would just hit the provider twice for the same information. Set it only
+      # if you want docker/monitoring health refreshed more often than the watchdog
+      # runs, or if you run WITHOUT a watchdog.
+      HEALTHCHECK_TIMES: ""
+      INTERNAL_API_KEY: "change-me"        # the watchdog authenticates with this
+    restart: unless-stopped
+
+  vpn-watchdog:
+    image: alpine/curl
+    depends_on:
+      - stream-share
+    # Reach both stream-share and gluetun's control server on localhost by sharing
+    # the same network namespace.
+    network_mode: "service:gluetun"
+    environment:
+      STREAM_SHARE_URL: "http://localhost:8080"
+      INTERNAL_API_KEY: "change-me"        # must match stream-share's INTERNAL_API_KEY
+      GLUETUN_URL: "http://localhost:8000"
+      # Auth for gluetun's control server — set EITHER these two (Basic Auth) ...
+      GLUETUN_USER: ""
+      GLUETUN_PASSWORD: ""
+      # ... OR this (API key). If both are set, Basic Auth is used.
+      GLUETUN_API_KEY: ""
+      # Override only for older gluetun that lacks the unified endpoint:
+      # GLUETUN_STATUS_PATH: "/v1/openvpn/status"
+      CHECK_TIMES: "04:00,16:00"
+      MAX_RECONNECTS: "5"
+      RECONNECT_TIMEOUT: "45"              # per-cycle budget to reach a usable IP
+    volumes:
+      - ./examples/vpn-watchdog/watchdog.sh:/watchdog.sh:ro
+    entrypoint: ["sh", "/watchdog.sh"]
+    # Optionally wait for stream-share to be up before starting probes:
+    depends_on:
+      stream-share:
+        condition: service_healthy
+    restart: unless-stopped
+
+# Note: the watchdog uses /api/internal/health (provider/VPN health). Do NOT use
+# the container's Docker health status as the block signal — that reflects
+# readiness (is stream-share up?), not whether the provider is blocking the IP.

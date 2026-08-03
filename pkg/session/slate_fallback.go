@@ -110,6 +110,20 @@ func (sm *SessionManager) dialUpstream(ctx context.Context, upstreamURL *url.URL
 	return resp, nil
 }
 
+// ProbeUpstream performs a single upstream attempt against target and reports
+// the outcome for health checks: nil when the provider served a live response
+// (200/206), or a classified UpstreamError otherwise — notably StatusCode 456
+// when the provider is blocking our egress IP. The response body is closed here
+// since the probe only cares about reachability, not the stream itself.
+func (sm *SessionManager) ProbeUpstream(ctx context.Context, target *url.URL) *UpstreamError {
+	resp, uerr := sm.dialUpstream(ctx, target)
+	if uerr != nil {
+		return uerr
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // slateViewFor resolves what the slate should say for a failure.
 func (sm *SessionManager) slateViewFor(buffer *StreamBuffer, uerr *UpstreamError) slate.View {
 	code, meaning, message := sm.errorCatalog.Lookup(uerr)

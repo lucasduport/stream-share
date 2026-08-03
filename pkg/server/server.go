@@ -30,6 +30,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -78,6 +79,15 @@ type Config struct {
 	// startTime records process start, used to report uptime via the API
 	startTime time.Time
 
+	// ready flips to 1 once startup completes and the server is about to listen,
+	// so /healthz can report container readiness for `depends_on:
+	// condition: service_healthy` ordering. Accessed atomically (0 = starting).
+	ready int32
+
+	// health caches the latest provider health-probe result. Non-nil only when
+	// HealthCheckEnabled; nil means /healthz reports "disabled".
+	health *healthState
+
 	// inProgressDownloads guards against concurrent duplicate fetchToFile goroutines
 	inProgressDownloads sync.Map
 }
@@ -120,6 +130,22 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		db:                   nil,
 		discordBot:           nil,
 		startTime:            time.Now(),
+	}
+
+	// Provider health check: report-only. Reconnecting the VPN on a bad result is
+	// left to an external watchdog (see docker-compose.yml), so nothing here knows
+	// about gluetun or any VPN.
+	if config.HealthCheckEnabled {
+		if config.HealthCheckTimeoutSeconds <= 0 {
+			config.HealthCheckTimeoutSeconds = 15
+		}
+		if config.HealthCheckMinIntervalSeconds <= 0 {
+			config.HealthCheckMinIntervalSeconds = 60
+		}
+		if strings.TrimSpace(config.HealthCheckStreamID) == "" {
+			utils.WarnLog("Health check enabled but HEALTHCHECK_STREAM_ID is empty; probes will report 'error'")
+		}
+		serverConfig.health = &healthState{}
 	}
 
 	// Force PostgreSQL initialization (sqlite removed)
@@ -396,6 +422,24 @@ func (c *Config) Serve() error {
 
 	// Add temporary link download route
 	router.GET("/download/:token", c.handleTemporaryLink)
+
+	// Container readiness endpoint for the Docker HEALTHCHECK. Reports whether
+	// THIS service has finished starting (see the ready flag set below), never
+	// provider/VPN state, so it is safe to gate compose ordering on.
+	router.GET("/healthz", c.healthz)
+
+	// Seed and, if configured, schedule provider health probes.
+	if c.health != nil {
+		healthStop := make(chan struct{})
+		c.startHealthMonitor(healthStop)
+		defer close(healthStop)
+	}
+
+	// Startup is complete; mark the service ready so /healthz returns 200 (and the
+	// container reports healthy) from here on. router.Run below starts accepting
+	// connections, so any request that reaches /healthz is necessarily past this
+	// point.
+	atomic.StoreInt32(&c.ready, 1)
 
 	// Add a message to indicate the server is ready
 	utils.InfoLog("[stream-share] Server is ready and listening on :%d", c.HostConfig.Port)

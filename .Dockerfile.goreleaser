@@ -1,4 +1,13 @@
 FROM alpine:3
 RUN apk add ca-certificates ffmpeg ttf-dejavu
 COPY stream-share /
+
+# Container health reports service READINESS: /healthz returns 200 once
+# stream-share is listening, 503/refused before then. This is what makes the
+# container report `healthy` for `depends_on: condition: service_healthy`. It
+# never contacts the IPTV provider. Keep this in sync with the main Dockerfile —
+# THIS file is what goreleaser and dev-build.yml publish to GHCR.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-8080}/healthz" || exit 1
+
 ENTRYPOINT ["/stream-share"]

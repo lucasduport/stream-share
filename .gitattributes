@@ -1,0 +1,4 @@
+# Keep shell scripts LF-only. CRLF endings break POSIX shells at runtime
+# (errors like `: not found` on blank lines and `elif unexpected`), which is
+# easy to hit if a script is edited or checked out on Windows.
+*.sh text eol=lf

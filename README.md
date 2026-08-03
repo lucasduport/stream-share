@@ -170,6 +170,9 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 | `/api/internal/history/:username?hours=N&limit=N&offset=N` | GET | Watch history for one user, paginated | X-API-Key |
 | `/api/internal/instance` | GET | Identify this deployment (name, uptime, enabled features) — for labeling data in a multi-instance dashboard | X-API-Key |
 | `/api/internal/stats?hours=N` | GET | Aggregate dashboard stats: live activity plus historical totals and top titles/users over the window (default 24h, `hours=0` for all-time) | X-API-Key |
+| `/api/internal/health` | GET | Force a fresh provider health probe (rate-limited) and return the verdict — see [Provider Health Check](#provider-health-check) | X-API-Key |
+
+There is also an unauthenticated **`GET /healthz`** at the server root (not under `/api/internal`) that reports container **readiness** — `200` once the service has finished starting and is listening, `503`/refused before then. It drives the Docker `HEALTHCHECK`; see [Container Health & Startup Ordering](#container-health--startup-ordering). (This is separate from provider/VPN health, which is on `/api/internal/health` above.)
 
 ### Building a dashboard
 
@@ -403,6 +406,78 @@ Notes:
 - A missing or malformed file logs a warning and falls back to the built-in messages. Bad JSON never stops streams from being served.
 - Text is sanitised before rendering, so characters that are meaningful to ffmpeg (`:`, quotes, `\`, `%`) are dropped from the picture. Keep messages plain.
 - Long messages wrap to two lines and are then truncated — aim for something short enough to read at a glance from the sofa.
+
+---
+
+## Container Health & Startup Ordering
+
+The image defines a Docker `HEALTHCHECK` that reports **readiness**: the container becomes `healthy` once stream-share has finished starting up and is listening, and stays `starting`/`unhealthy` until then. This lets other services in a Compose stack wait for stream-share to be ready before they start:
+
+```yaml
+services:
+  stream-share:
+    image: ghcr.io/x3n0n10/stream-share:latest
+    # ... (the image already includes the HEALTHCHECK) ...
+
+  some-dependent-service:
+    depends_on:
+      stream-share:
+        condition: service_healthy   # waits until /healthz returns 200
+```
+
+Under the hood the check polls **`GET /healthz`**, which returns `200 {"status":"ready"}` after startup completes (the point where the server logs `Server is ready and listening` and begins accepting connections) and `503 {"status":"starting"}` before that. The endpoint is unauthenticated, trivial, and never contacts the IPTV provider, so it is cheap to poll and safe to gate ordering on.
+
+This readiness check applies to **every** deployment and is independent of the VPN/provider feature below — that has its own separate endpoint (`/api/internal/health`) and never affects the container's health status. You can tune the check's cadence by overriding the `HEALTHCHECK` in your own Compose file (e.g. a shorter `interval` for faster ordering, or a longer `start_period` if first-time playlist fetching is slow).
+
+---
+
+## Provider Health Check
+
+> **This feature is only relevant if you run stream-share behind a VPN.** Without a VPN there is no egress IP to rotate, so there is nothing for it to do — leave `HEALTHCHECK_ENABLED` off. It is separate from the container readiness check above and never affects the container's `healthy`/`unhealthy` status.
+
+VPN egress IPs get blocked. If you run stream-share behind a VPN, the provider will periodically ban whatever server you're on and refuse live streams until you reconnect onto a fresh IP — sometimes after a few tries. This feature lets stream-share *detect* that state so an external service can reconnect the VPN automatically.
+
+**stream-share only reports health. It never touches the VPN.** Reconnecting is deliberately left to a separate service, so this app has no dependency on any particular VPN — gluetun, WireGuard, OpenVPN, or anything else you choose. That separation is the whole design:
+
+- **stream-share** probes one configured live channel and classifies the result — `healthy` (provider served video), `blocked` (the provider refused with a code that means "your IP is banned"), or `error` (outage, bad probe channel, transport failure). It's the right place to do this: it already holds the provider credentials and, when it shares the VPN's network namespace, its probe egresses through the exact IP a real viewer would use.
+- **`GET /api/internal/health`** (authenticated) exposes that verdict as machine-readable JSON, forcing a fresh probe on each call.
+- **Your watchdog** (a separate container, for whatever VPN you run) reads that endpoint and, only on `blocked`, reconnects the VPN onto a new server and re-checks in a loop. A complete example — using gluetun's control API but adaptable to any VPN — is in [`examples/vpn-watchdog/`](examples/vpn-watchdog/).
+
+Which upstream code counts as "blocked" is configurable via `HEALTHCHECK_BLOCKED_CODES`. Many Xtream providers use **HTTP 456**, which is the default, but that code is outside the HTTP standard and providers may use others — so it is not hardcoded.
+
+### How it works
+
+1. On a schedule (`HEALTHCHECK_TIMES`, e.g. `04:00,16:00` in the container's `TZ`) and once at startup, stream-share dials the probe channel with the same headers a real player uses and records the verdict. It reuses the provider-error classification from the error-slate feature, so a block code is surfaced as `blocked` even though a live viewer would normally see a slate instead.
+2. `GET /api/internal/health` (authenticated) **forces** a fresh probe and returns the verdict. A watchdog calls this right after reconnecting the VPN, to test whether the new IP is accepted. It's rate-limited by `HEALTHCHECK_MIN_INTERVAL_SECONDS` so it can't be used to hammer the provider. The HTTP status mirrors the verdict — `200` when healthy, `503` when blocked, errored, or stale — but a consumer should read the `status` field from the body rather than rely on the status code (a `503` here is the verdict, not a transport failure).
+
+Probing is intentionally sparing — twice a day plus a handful of checks during an actual reconnect — because aggressive probing is exactly what gets an IP blocked faster.
+
+The `/api/internal/health` JSON body looks like:
+
+```json
+{ "status": "blocked", "code": "456", "detail": "provider returned 456: egress IP is blocked",
+  "checked_at": "2026-08-03T04:00:07Z", "age_seconds": 12, "stale": false }
+```
+
+`status` is one of `healthy`, `blocked`, `error`, `unknown` (no probe yet), or `disabled`.
+
+### Configuration
+
+| Env var | Default | Description |
+|---|---|---|
+| `HEALTHCHECK_ENABLED` | `false` | Turn the provider health probe on (only useful behind a VPN) |
+| `HEALTHCHECK_STREAM_ID` | — | Live channel id to probe, as it appears in a stream URL (e.g. `12345` or `12345.ts`). Pick a stable, always-on channel |
+| `HEALTHCHECK_BLOCKED_CODES` | `456` | Comma-separated upstream status code(s) that mean "IP blocked" (reported as `blocked` vs generic `error`). `456` is common but non-standard, so it's configurable |
+| `HEALTHCHECK_TIMES` | — | Comma-separated local `HH:MM` times to self-probe, e.g. `04:00,16:00`. Empty = probe only at startup and on demand, leaving all scheduling to the watchdog |
+| `HEALTHCHECK_TIMEOUT_SECONDS` | `15` | Per-probe timeout |
+| `HEALTHCHECK_MIN_INTERVAL_SECONDS` | `60` | Minimum spacing between real probes; caps how often the force-probe endpoint hits the provider |
+| `HEALTHCHECK_STALE_MINUTES` | `0` | If > 0, `/api/internal/health` reports `stale` (HTTP `503`) when the last probe is older than this (catches a stalled probe loop) |
+
+Note: this provider feature is **separate** from the container's Docker `HEALTHCHECK`, which reports readiness via `/healthz` (see [Container Health & Startup Ordering](#container-health--startup-ordering)). Enabling or disabling `HEALTHCHECK_ENABLED` never changes whether the container is reported `healthy`.
+
+### Closing the loop (external watchdog)
+
+See [`examples/vpn-watchdog/`](examples/vpn-watchdog/) for a ready-to-adapt script and compose snippet. It targets gluetun as a concrete example, but the pattern works for any VPN with a controllable reconnect — swap out the reconnect call. The recommended topology runs stream-share with `network_mode: "service:<vpn>"` so its provider traffic egresses through the VPN, and runs the watchdog in the same namespace so it can reach the VPN's control server on `http://localhost:8000`. The watchdog reads `/api/internal/health`, and on `blocked` reconnects the VPN onto a new server — for gluetun: stop, confirm stopped, start, confirm running (supporting both API-key and Basic-Auth control servers) — then re-runs the health check, repeating until the provider accepts the new IP or an attempt budget is exhausted. stream-share and the VPN never reference each other — the watchdog is the only piece that knows about both.
 
 ---
 

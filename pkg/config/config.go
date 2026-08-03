@@ -120,4 +120,40 @@ type ProxyConfig struct {
 	// shared upstream connection (no extra connection to the provider) and
 	// analyzes them with ffprobe, which must be present in the runtime image.
 	StreamTechProbeEnabled bool
+
+	// Provider health check. When enabled, stream-share periodically probes one
+	// configured live channel and reports whether the IPTV provider is serving us
+	// or blocking our current egress IP (HTTP 456 — typical when the VPN server's
+	// IP has been banned). It surfaces this via /healthz (driving the Docker
+	// HEALTHCHECK) and an authenticated force-probe at /api/internal/health.
+	//
+	// stream-share only *reports* health. Reconnecting the VPN on a bad result is
+	// intentionally left to an external service so this app carries no dependency
+	// on gluetun or any particular VPN. See docker-compose.yml for a worked
+	// example of such a watchdog.
+	HealthCheckEnabled bool
+	// HealthCheckStreamID is the live channel id to probe (as it appears in a
+	// stream URL, e.g. "12345" or "12345.ts").
+	HealthCheckStreamID string
+	// HealthCheckBlockedCodes is a comma-separated list of upstream HTTP status
+	// codes that mean "our egress IP is blocked" (reported as "blocked" rather
+	// than a generic "error"). Defaults to "456", which many Xtream providers
+	// use — but that code is outside the HTTP standard, so providers may use
+	// others; hence it is configurable rather than hardcoded.
+	HealthCheckBlockedCodes string
+	// HealthCheckTimes is an optional comma-separated list of local wall-clock
+	// times (HH:MM, in the container's TZ) at which to self-probe, e.g.
+	// "04:00,16:00". When empty, probes only happen at startup and on demand via
+	// the force-probe endpoint, leaving all scheduling to the external watchdog.
+	HealthCheckTimes string
+	// HealthCheckTimeoutSeconds bounds a single probe. Defaults to 15 when unset.
+	HealthCheckTimeoutSeconds int
+	// HealthCheckMinIntervalSeconds is the minimum spacing between real provider
+	// probes, so the force-probe endpoint cannot be used to hammer the provider
+	// (which is exactly what gets an IP blocked). Defaults to 60 when unset.
+	HealthCheckMinIntervalSeconds int
+	// HealthCheckStaleMinutes, when > 0, makes /healthz report unhealthy if the
+	// last probe is older than this — catching a probing loop that has silently
+	// stalled. Disabled (0) by default.
+	HealthCheckStaleMinutes int
 }

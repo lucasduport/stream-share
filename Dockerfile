@@ -42,5 +42,16 @@ USER appuser
 # Expose port (adjust if your app uses a specific port; based on code, it might be 8080 or similar)
 EXPOSE 8080
 
+# Container health reflects service READINESS: /healthz returns 200 once
+# stream-share has finished starting up and is listening, and 503 (or a refused
+# connection) before then. This is what makes the container report `healthy`, so
+# other services can order on it with `depends_on: condition: service_healthy`.
+# It intentionally does NOT reflect provider/VPN state — that lives on the
+# authenticated /api/internal/health endpoint and is consumed by an external VPN
+# watchdog (see docker-compose.yml). The check is trivial and never touches the
+# provider. start-period is generous to cover slow first-time playlist fetches.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
+  CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-8080}/healthz" || exit 1
+
 # Set entrypoint
 ENTRYPOINT ["/stream-share"]
