@@ -171,6 +171,10 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 | `/api/internal/instance` | GET | Identify this deployment (name, uptime, enabled features) — for labeling data in a multi-instance dashboard | X-API-Key |
 | `/api/internal/stats?hours=N` | GET | Aggregate dashboard stats: live activity plus historical totals and top titles/users over the window (default 24h, `hours=0` for all-time) | X-API-Key |
 | `/api/internal/health` | GET | Force a fresh provider health probe (rate-limited) and return the verdict — see [Provider Health Check](#provider-health-check) | X-API-Key |
+| `/api/internal/ip-aliases` | GET | List all configured IP -> alias mappings | X-API-Key |
+| `/api/internal/ip-aliases` | POST | Create or replace the alias for an IP address — body `{"ip_address": "...", "alias": "..."}` | X-API-Key |
+| `/api/internal/ip-aliases/delete/:ip` | POST | Remove the alias for an IP address | X-API-Key |
+| `/api/internal/ip-aliases/resolve/:alias` | GET | Resolve an alias back to its IP address (case-insensitive) | X-API-Key |
 
 There is also an unauthenticated **`GET /healthz`** at the server root (not under `/api/internal`) that reports container **readiness** — `200` once the service has finished starting and is listening, `503`/refused before then. It drives the Docker `HEALTHCHECK`; see [Container Health & Startup Ordering](#container-health--startup-ordering). (This is separate from provider/VPN health, which is on `/api/internal/health` above.)
 
@@ -183,6 +187,24 @@ Everything above is machine-readable JSON (`{success, data, error}`) and is enou
 - **VOD search**: `/api/internal/vod/search` — the same live provider search used by the `/vod` Discord command.
 - **Overview stats**: `/api/internal/stats` for counts and leaderboards to show on a summary page.
 - **Multi-instance**: this API has no built-in concept of "instance" or "tenant" — each deployment is independent, with its own database and API key. Call `/api/internal/instance` on each one to fetch a stable display name (set via `INSTANCE_NAME`, see below) and combine results client-side by polling each instance's base URL with its own API key.
+
+#### Viewer identity and IP aliases
+
+Every place a viewer shows up — `streams`/`status`'s `viewers` list, `users`, and `history`'s `username` field — is keyed by whatever `resolveRequestUsername` resolved for that request. With LDAP enabled that's the LDAP username; with LDAP disabled, the native Xtream streaming routes carry no per-request credentials, so **the client's raw IP address becomes the de-facto viewer identity** instead.
+
+Rather than showing bare IPs in a dashboard, assign each one a friendly name:
+
+```bash
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"ip_address": "192.168.1.42", "alias": "Living Room TV"}' \
+  https://streamshare.example.com/api/internal/ip-aliases
+```
+
+Every endpoint that surfaces a viewer identity then includes a resolved `display_name` alongside the raw one — e.g. `streams`/`status` return `viewers: [{"id": "192.168.1.42", "display_name": "Living Room TV"}]` instead of a bare string list, `users` adds a top-level `display_name`, and `history`'s per-entry `username` is joined by a `display_name`. The raw `id`/`username` (IP or LDAP username) is always still there too — that's the real identity used for lookups (e.g. `GET /users/:username`, `GET /history/:username`); the alias is display-only. One alias per IP: posting again for the same `ip_address` replaces the existing alias rather than adding a second one. Aliases are also unique (case-insensitively) across IPs, so they double as a reverse lookup — `GET /ip-aliases/resolve/:alias` — used by Discord's `/history alias:` option to look a viewer up by their friendly name instead of typing out the IP.
+
+This also flows into Discord:
+- `/status`'s viewer list shows `Alias (raw IP)` when an alias is set (or just the raw identifier when it isn't), so you always see both at a glance.
+- `/history` accepts either `username` (raw IP or LDAP username) or `alias` — not both — to drill into one viewer's timeline; the embed title shows the resolved alias either way.
 
 #### Technical stream info (`tech`)
 

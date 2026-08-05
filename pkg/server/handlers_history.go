@@ -88,8 +88,10 @@ func (c *Config) getHistoryFeed(ctx *gin.Context) {
 		utils.WarnLog("Failed to count history feed: %v", err)
 	}
 
+	aliases := c.loadIPAliasMap()
 	type item struct {
 		Username    string    `json:"username"`
+		DisplayName string    `json:"display_name"`
 		StreamID    string    `json:"stream_id"`
 		StreamType  string    `json:"stream_type"`
 		StreamTitle string    `json:"stream_title"`
@@ -100,6 +102,7 @@ func (c *Config) getHistoryFeed(ctx *gin.Context) {
 	for _, e := range entries {
 		feedItems = append(feedItems, item{
 			Username:    e.Username,
+			DisplayName: displayNameFor(e.Username, aliases),
 			StreamID:    e.StreamID,
 			StreamType:  e.StreamType,
 			StreamTitle: c.historyLabel(e.StreamTitle, e.StreamID),
@@ -115,7 +118,7 @@ func (c *Config) getHistoryFeed(ctx *gin.Context) {
 		for _, it := range feedItems {
 			dur := utils.HumanDuration(time.Duration(it.DurationSec) * time.Second)
 			fmt.Fprintf(&b, "- %s · %s · %s [%s] (%s)\n",
-				it.StartTime.Format("01-02 15:04"), it.Username, it.StreamTitle, it.StreamType, dur,
+				it.StartTime.Format("01-02 15:04"), it.DisplayName, it.StreamTitle, it.StreamType, dur,
 			)
 		}
 	}
@@ -219,14 +222,15 @@ func (c *Config) getUserHistory(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, types.APIResponse{
 		Success: true,
 		Data: map[string]interface{}{
-			"username": username,
-			"entries":  entryItems,
-			"text":     b.String(),
-			"hours":    hours,
-			"count":    len(entryItems),
-			"total":    total,
-			"limit":    limit,
-			"offset":   offset,
+			"username":     username,
+			"display_name": displayNameFor(username, c.loadIPAliasMap()),
+			"entries":      entryItems,
+			"text":         b.String(),
+			"hours":        hours,
+			"count":        len(entryItems),
+			"total":        total,
+			"limit":        limit,
+			"offset":       offset,
 		},
 	})
 }

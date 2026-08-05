@@ -103,6 +103,13 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 	api.GET("/instance", c.getInstanceInfo)
 	api.GET("/stats", c.getDashboardStats)
 
+	// IP alias management — assign a friendly name to a client IP, which is
+	// the de-facto viewer identity when LDAP is disabled
+	api.GET("/ip-aliases", c.listIPAliases)
+	api.POST("/ip-aliases", c.upsertIPAlias)
+	api.POST("/ip-aliases/delete/:ip", c.deleteIPAlias)
+	api.GET("/ip-aliases/resolve/:alias", c.resolveIPAlias)
+
 	// Debug endpoint to verify API is working
 	api.GET("/ping", func(ctx *gin.Context) {
 		utils.DebugLog("API ping received")

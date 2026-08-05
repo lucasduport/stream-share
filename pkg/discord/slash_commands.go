@@ -67,7 +67,8 @@ func (b *Bot) commandSpecs() []*discordgo.ApplicationCommand {
 			Description:              "Watch history timeline (live + VOD)",
 			DefaultMemberPermissions: int64Ptr(discordgo.PermissionManageGuild),
 			Options: []*discordgo.ApplicationCommandOption{
-				{Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Client to drill into (omit for a global timeline of all clients)", Required: false},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "username", Description: "Client to drill into by username/IP (omit for a global timeline of all clients)", Required: false},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "alias", Description: "Client to drill into by its assigned alias instead of username/IP", Required: false},
 				{Type: discordgo.ApplicationCommandOptionString, Name: "period", Description: "Time window", Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{Name: "Last 24 hours", Value: "24h"},
 					{Name: "Last 7 days", Value: "7d"},
@@ -252,10 +253,11 @@ func (b *Bot) handleApplicationCommand(s *discordgo.Session, i *discordgo.Intera
 			return
 		}
 		username := optString(i, "username")
+		alias := optString(i, "alias")
 		hours := periodToHours(optString(i, "period"))
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Fetching history…"}})
 		mc := toMessageCreateFromInteraction(i, "")
-		b.handleHistory(s, mc, username, hours)
+		b.handleHistory(s, mc, username, alias, hours)
 
 	case "disconnect":
 		if !b.isAdmin(i.Member) {

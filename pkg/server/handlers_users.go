@@ -27,6 +27,14 @@ import (
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
+// userSessionView adds a display-resolved name to a user session — see
+// displayNameFor in ip_aliases.go: when LDAP is disabled, Username is the
+// client's raw IP, so DisplayName carries any alias configured for it.
+type userSessionView struct {
+	*types.UserSession
+	DisplayName string `json:"display_name"`
+}
+
 // getAllUsers returns information about all active users
 func (c *Config) getAllUsers(ctx *gin.Context) {
 	utils.DebugLog("API: Getting all users")
@@ -43,9 +51,15 @@ func (c *Config) getAllUsers(ctx *gin.Context) {
 	sessions := c.sessionManager.GetAllSessions()
 	utils.DebugLog("API: Found %d active user sessions", len(sessions))
 
+	aliases := c.loadIPAliasMap()
+	views := make([]userSessionView, 0, len(sessions))
+	for _, s := range sessions {
+		views = append(views, userSessionView{UserSession: s, DisplayName: displayNameFor(s.Username, aliases)})
+	}
+
 	ctx.JSON(http.StatusOK, types.APIResponse{
 		Success: true,
-		Data:    sessions,
+		Data:    views,
 	})
 }
 
@@ -76,7 +90,7 @@ func (c *Config) getUserInfo(ctx *gin.Context) {
 	utils.DebugLog("API: Found user session for %s, streaming: %s", username, session.StreamID)
 	ctx.JSON(http.StatusOK, types.APIResponse{
 		Success: true,
-		Data:    session,
+		Data:    userSessionView{UserSession: session, DisplayName: displayNameFor(session.Username, c.loadIPAliasMap())},
 	})
 }
 

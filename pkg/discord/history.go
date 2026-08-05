@@ -42,10 +42,26 @@ func periodToHours(period string) int {
 	}
 }
 
-// handleHistory shows watch history. With no username: a global timeline feed of
-// recent watch events across all clients. With a username: that client's recent
-// watch timeline. `hours`=0 means all-time.
-func (b *Bot) handleHistory(s *discordgo.Session, m *discordgo.MessageCreate, username string, hours int) {
+// handleHistory shows watch history. With no username/alias: a global timeline
+// feed of recent watch events across all clients. With a username (a raw
+// LDAP username or IP) or an alias (resolved to its IP via the ip-aliases
+// API): that client's recent watch timeline. `hours`=0 means all-time.
+func (b *Bot) handleHistory(s *discordgo.Session, m *discordgo.MessageCreate, username, alias string, hours int) {
+	if username != "" && alias != "" {
+		b.fail(m.ChannelID, "❌ History Failed", "Provide only one of `username` or `alias`, not both.")
+		return
+	}
+	if alias != "" {
+		ok, data, err := b.makeAPIRequest("GET", "/ip-aliases/resolve/"+url.PathEscape(alias), nil)
+		mp, _ := data.(map[string]interface{})
+		ip, _ := mp["ip_address"].(string)
+		if err != nil || !ok || ip == "" {
+			b.fail(m.ChannelID, "❌ History Failed", fmt.Sprintf("No alias named %q found.", alias))
+			return
+		}
+		username = ip
+	}
+
 	endpoint := "/history"
 	title := "📜 Watch History — Recent Activity"
 	if username != "" {
@@ -61,6 +77,14 @@ func (b *Bot) handleHistory(s *discordgo.Session, m *discordgo.MessageCreate, us
 		return
 	}
 	mp, _ := data.(map[string]interface{})
+	// /history/:username resolves an IP alias into display_name (LDAP usernames
+	// pass through unchanged) — prefer it for the title so an aliased viewer
+	// doesn't show up by raw IP here while everywhere else shows the alias.
+	if username != "" {
+		if dn, ok := mp["display_name"].(string); ok && strings.TrimSpace(dn) != "" {
+			title = "📜 Watch History — " + dn
+		}
+	}
 	text := ""
 	if s, ok := mp["text"].(string); ok {
 		text = strings.TrimSpace(s)

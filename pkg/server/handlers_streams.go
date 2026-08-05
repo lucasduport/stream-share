@@ -28,6 +28,15 @@ import (
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
+// ViewerInfo identifies one active viewer: a stable raw ID (the LDAP username,
+// or — when LDAP is disabled — the client's IP address, which is the de-facto
+// per-viewer identity; see resolveRequestUsername in server.go) plus a
+// DisplayName resolved through any configured IP alias (see ip_aliases.go).
+type ViewerInfo struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
 // activeStreamItem is the API view of one active stream: display-resolved
 // title/EPG id, current viewers, and (for live streams, when enabled) best-
 // effort technical audio/video info from stream_probe.go.
@@ -37,7 +46,7 @@ type activeStreamItem struct {
 	StreamTitle  string          `json:"stream_title"`
 	EPGChannelID string          `json:"epg_channel_id,omitempty"`
 	ViewerCount  int             `json:"viewer_count"`
-	Viewers      []string        `json:"viewers"`
+	Viewers      []ViewerInfo    `json:"viewers"`
 	StartedAt    time.Time       `json:"started_at"`
 	Duration     string          `json:"duration"`
 	Tech         *StreamTechInfo `json:"tech,omitempty"`
@@ -47,18 +56,20 @@ type activeStreamItem struct {
 // resolution mirrors resolveTitleAtStart's fallback: the stored title is used
 // when present and meaningful, otherwise a live channel-index/VOD lookup is
 // attempted, falling back to the raw stream ID as a last resort so the field
-// is never blank.
+// is never blank. aliases is the current IP->alias map (see loadIPAliasMap),
+// loaded once by the caller and passed down so listing many streams doesn't
+// mean one alias query per stream.
 //
 // This also attaches any cached technical info and kicks off a background
 // refresh if the cache is stale/missing — never blocks the caller. Live
 // streams are probed by sampling their shared upstream connection; VOD/series
 // are probed straight off the local file once fully cached (see
 // vodCacheFilePath).
-func (c *Config) buildActiveStreamItem(s *types.StreamSession) activeStreamItem {
+func (c *Config) buildActiveStreamItem(s *types.StreamSession, aliases map[string]string) activeStreamItem {
 	viewers := s.GetViewers()
-	names := make([]string, 0, len(viewers))
+	viewerInfos := make([]ViewerInfo, 0, len(viewers))
 	for u := range viewers {
-		names = append(names, u)
+		viewerInfos = append(viewerInfos, ViewerInfo{ID: u, DisplayName: displayNameFor(u, aliases)})
 	}
 
 	title := strings.TrimSpace(s.StreamTitle)
@@ -79,8 +90,8 @@ func (c *Config) buildActiveStreamItem(s *types.StreamSession) activeStreamItem 
 		StreamType:   s.StreamType,
 		StreamTitle:  title,
 		EPGChannelID: epgID,
-		ViewerCount:  len(names),
-		Viewers:      names,
+		ViewerCount:  len(viewerInfos),
+		Viewers:      viewerInfos,
 		StartedAt:    s.StartTime,
 		Duration:     dur.String(),
 	}
@@ -134,9 +145,10 @@ func (c *Config) getAllStreams(ctx *gin.Context) {
 	streams := c.sessionManager.GetAllStreams()
 	utils.DebugLog("API: Found %d active streams", len(streams))
 
+	aliases := c.loadIPAliasMap()
 	items := make([]activeStreamItem, 0, len(streams))
 	for _, s := range streams {
-		items = append(items, c.buildActiveStreamItem(s))
+		items = append(items, c.buildActiveStreamItem(s, aliases))
 	}
 
 	ctx.JSON(http.StatusOK, types.APIResponse{
@@ -171,7 +183,7 @@ func (c *Config) getStreamInfo(ctx *gin.Context) {
 
 	utils.DebugLog("API: Found active %s with %d viewers", c.streamLabel(streamID), len(stream.GetViewers()))
 
-	item := c.buildActiveStreamItem(stream)
+	item := c.buildActiveStreamItem(stream, c.loadIPAliasMap())
 	// This is a single-item lookup, so it's worth the extra latency of a
 	// synchronous probe when there's nothing usable cached yet.
 	if item.Tech == nil {

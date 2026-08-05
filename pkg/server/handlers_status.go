@@ -40,13 +40,14 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 	}
 
 	streams := c.sessionManager.GetAllStreams()
+	aliases := c.loadIPAliasMap()
 	summary := make([]activeStreamItem, 0, len(streams))
 
 	for _, s := range streams {
 		if !s.Active {
 			continue
 		}
-		summary = append(summary, c.buildActiveStreamItem(s))
+		summary = append(summary, c.buildActiveStreamItem(s, aliases))
 	}
 
 	// Derive user and stream counts
@@ -76,8 +77,17 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 			if it.EPGChannelID != "" {
 				epgSuffix = fmt.Sprintf(" [%s]", it.EPGChannelID)
 			}
+			viewerNames := make([]string, 0, len(it.Viewers))
+			for _, v := range it.Viewers {
+				if v.DisplayName != "" && v.DisplayName != v.ID {
+					// Aliased: show the friendly name with the raw IP alongside it.
+					viewerNames = append(viewerNames, fmt.Sprintf("%s (%s)", v.DisplayName, v.ID))
+				} else {
+					viewerNames = append(viewerNames, v.ID)
+				}
+			}
 			fmt.Fprintf(&b, "- %s%s [%s] — %d viewer(s): %s (since %s)\n",
-				title, epgSuffix, it.StreamType, it.ViewerCount, strings.Join(it.Viewers, ", "), it.Duration,
+				title, epgSuffix, it.StreamType, it.ViewerCount, strings.Join(viewerNames, ", "), it.Duration,
 			)
 			if tech := formatTechSummary(it.Tech); tech != "" {
 				fmt.Fprintf(&b, "  %s\n", tech)
