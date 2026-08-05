@@ -45,6 +45,7 @@ func TestRegisterUser_createsSession(t *testing.T) {
 	sess := sm.RegisterUser("alice", "1.2.3.4", "TestAgent/1.0")
 	if sess == nil {
 		t.Fatal("expected session, got nil")
+		return
 	}
 	if sess.Username != "alice" {
 		t.Fatalf("want username alice, got %q", sess.Username)
@@ -62,6 +63,7 @@ func TestRegisterUser_idempotent(t *testing.T) {
 	got := sm.GetUserSession("alice")
 	if got == nil {
 		t.Fatal("session not found after second register")
+		return
 	}
 	if got.IPAddress != "5.6.7.8" {
 		t.Fatalf("expected IP to be updated to 5.6.7.8, got %q", got.IPAddress)
@@ -254,6 +256,7 @@ func TestDisconnectUser(t *testing.T) {
 	sess := sm.GetUserSession("alice")
 	if sess == nil {
 		t.Fatal("user session should still exist after DisconnectUser (soft disconnect)")
+		return
 	}
 	if sess.StreamID != "" {
 		t.Fatalf("stream association should be empty, got %q", sess.StreamID)

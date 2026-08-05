@@ -25,6 +25,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/lucasduport/stream-share/pkg/banner"
 	"github.com/lucasduport/stream-share/pkg/config"
 	"github.com/lucasduport/stream-share/pkg/server"
 	homedir "github.com/mitchellh/go-homedir"
@@ -48,6 +49,7 @@ It supports:
 - Caching for performance optimization`,
 
 	Run: func(cmd *cobra.Command, args []string) {
+		banner.Print()
 		log.Printf("[stream-share] Server is starting...")
 
 		// Parse M3U URL if provided
