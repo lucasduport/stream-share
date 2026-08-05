@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.svg" alt="" width="96" height="96"></p>
+
 # StreamShare - Advanced IPTV Access Management Platform
 
 ## Overview

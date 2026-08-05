@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="bg" x1="15%" y1="0%" x2="85%" y2="100%">
+      <stop offset="0%" stop-color="#0d1914" />
+      <stop offset="100%" stop-color="#030906" />
+    </linearGradient>
+    <clipPath id="glyphClip">
+      <rect x="4" y="0" width="96" height="100" />
+    </clipPath>
+  </defs>
+  <rect width="200" height="200" rx="44" fill="url(#bg)" />
+  <g transform="translate(19.23 19.23) scale(1.6154)">
+    <g clip-path="url(#glyphClip)">
+      <line x1="-10" y1="6" x2="64" y2="50" stroke="#65c86b" stroke-width="15" />
+      <line x1="-10" y1="50" x2="64" y2="50" stroke="#65c86b" stroke-width="15" />
+      <line x1="-10" y1="94" x2="64" y2="50" stroke="#65c86b" stroke-width="15" />
+    </g>
+    <polygon points="58,20 58,80 98,50" fill="#9bf89f" />
+  </g>
+</svg>
