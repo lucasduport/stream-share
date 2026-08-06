@@ -43,8 +43,8 @@ jobs:
           docker buildx build \
             --platform linux/amd64 \
             --file .Dockerfile.goreleaser \
-            --label org.opencontainers.image.source=https://github.com/x3n0n10/stream-share \
-            --tag ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository_owner }}/stream-share \
+            --tag ghcr.io/${{ github.repository_owner }}/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
             ${{ inputs.push_image && '--push' || '--load' }} \
             .
 
@@ -54,8 +54,8 @@ jobs:
           docker buildx build \
             --platform linux/arm64 \
             --file .Dockerfile.goreleaser \
-            --label org.opencontainers.image.source=https://github.com/x3n0n10/stream-share \
-            --tag ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-arm64 \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository_owner }}/stream-share \
+            --tag ghcr.io/${{ github.repository_owner }}/stream-share:dev-${{ env.SHORT_SHA }}-arm64 \
             ${{ inputs.push_image && '--push' || '--load' }} \
             .
 
@@ -63,7 +63,7 @@ jobs:
         if: inputs.push_image
         run: |
           docker buildx imagetools create \
-            -t ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }} \
-            -t ghcr.io/x3n0n10/stream-share:dev \
-            ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
-            ghcr.io/x3n0n10/stream-share:dev-${{ env.SHORT_SHA }}-arm64
+            -t ghcr.io/${{ github.repository_owner }}/stream-share:dev-${{ env.SHORT_SHA }} \
+            -t ghcr.io/${{ github.repository_owner }}/stream-share:dev \
+            ghcr.io/${{ github.repository_owner }}/stream-share:dev-${{ env.SHORT_SHA }}-amd64 \
+            ghcr.io/${{ github.repository_owner }}/stream-share:dev-${{ env.SHORT_SHA }}-arm64

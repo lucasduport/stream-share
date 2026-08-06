@@ -2,3 +2,10 @@
 # (errors like `: not found` on blank lines and `elif unexpected`), which is
 # easy to hit if a script is edited or checked out on Windows.
 *.sh text eol=lf
+
+# Keep the image-publish pipeline owner-agnostic on merges from forks: always
+# retain OUR version of these files rather than taking a fork's hardcoded owner.
+# One-time per clone to enable the driver:  git config merge.ours.driver true
+.goreleaser.yaml                 merge=ours
+.github/workflows/dev-build.yml  merge=ours
+.github/workflows/cd.yml         merge=ours

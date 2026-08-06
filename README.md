@@ -440,7 +440,7 @@ The image defines a Docker `HEALTHCHECK` that reports **readiness**: the contain
 ```yaml
 services:
   stream-share:
-    image: ghcr.io/x3n0n10/stream-share:latest
+    image: ghcr.io/lucasduport/stream-share:latest
     # ... (the image already includes the HEALTHCHECK) ...
 
   some-dependent-service:

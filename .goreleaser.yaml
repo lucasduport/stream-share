@@ -24,16 +24,15 @@ archives:
        formats: [ 'zip' ]
 
 release:
-  github:
-    owner: x3n0n10
-    name: stream-share
+  # owner/name omitted so GoReleaser infers them from the `origin` git remote —
+  # keeps the release owner-agnostic across forks (in Actions, origin = this repo).
   draft: false
 
 nfpms:
   -
-   vendor: x3n0n10
-   homepage: https://github.com/x3n0n10/stream-share
-   maintainer: x3n0n10
+   vendor: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+   homepage: "https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/stream-share"
+   maintainer: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
    description: IPTV Proxy with LDAP support
    license: GPL-3.0
    formats:
@@ -42,8 +41,8 @@ nfpms:
 
 dockers:
   - image_templates:
-    - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-arm64"
-    - "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest-arm64{{ end }}"
+    - "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:{{ .Tag }}-arm64"
+    - "{{ if not .Prerelease }}ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:latest-arm64{{ end }}"
     use: buildx
     goos: linux
     goarch: arm64
@@ -51,7 +50,7 @@ dockers:
     - stream-share
     build_flag_templates:
     - "--platform=linux/arm64/v8"
-    - "--label=org.opencontainers.image.source=https://github.com/x3n0n10/stream-share"
+    - "--label=org.opencontainers.image.source=https://github.com/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share"
     - "--label=org.opencontainers.image.created={{.Date}}"
     - "--label=org.opencontainers.image.name={{.ProjectName}}"
     - "--label=org.opencontainers.image.revision={{.FullCommit}}"
@@ -60,8 +59,8 @@ dockers:
     dockerfile: .Dockerfile.goreleaser
 
   - image_templates:
-    - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-amd64"
-    - "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest-amd64{{ end }}"
+    - "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:{{ .Tag }}-amd64"
+    - "{{ if not .Prerelease }}ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:latest-amd64{{ end }}"
     use: buildx
     goos: linux
     goarch: amd64
@@ -69,7 +68,7 @@ dockers:
     - stream-share
     build_flag_templates:
     - "--platform=linux/amd64"
-    - "--label=org.opencontainers.image.source=https://github.com/x3n0n10/stream-share"
+    - "--label=org.opencontainers.image.source=https://github.com/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share"
     - "--label=org.opencontainers.image.created={{.Date}}"
     - "--label=org.opencontainers.image.name={{.ProjectName}}"
     - "--label=org.opencontainers.image.revision={{.FullCommit}}"
@@ -78,12 +77,12 @@ dockers:
     dockerfile: .Dockerfile.goreleaser
 
 docker_manifests:
-  - name_template: "ghcr.io/x3n0n10/stream-share:{{ .Tag }}"
+  - name_template: "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:{{ .Tag }}"
     image_templates:
-      - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-amd64"
-      - "ghcr.io/x3n0n10/stream-share:{{ .Tag }}-arm64"
-  - name_template: "{{ if not .Prerelease }}ghcr.io/x3n0n10/stream-share:latest{{ end }}"
+      - "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:{{ .Tag }}-amd64"
+      - "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:{{ .Tag }}-arm64"
+  - name_template: "{{ if not .Prerelease }}ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:latest{{ end }}"
     image_templates:
-      - "ghcr.io/x3n0n10/stream-share:latest-amd64"
-      - "ghcr.io/x3n0n10/stream-share:latest-arm64"
+      - "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:latest-amd64"
+      - "ghcr.io/{{ tolower .Env.GITHUB_REPOSITORY_OWNER }}/stream-share:latest-arm64"
     skip_push: "{{ if .Prerelease }}true{{ end }}"

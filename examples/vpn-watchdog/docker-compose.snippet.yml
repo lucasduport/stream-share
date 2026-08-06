@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
 
   stream-share:
-    image: ghcr.io/x3n0n10/stream-share:latest
+    image: ghcr.io/lucasduport/stream-share:latest
     # Share gluetun's network stack so all provider traffic egresses via the VPN.
     # Note: with network_mode you cannot also set `ports:` here — publish them on
     # the gluetun service (above) instead.
