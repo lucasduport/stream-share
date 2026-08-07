@@ -112,10 +112,6 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 	}
 
 	if strings.TrimSpace(action) == "" {
-		protocol := "http"
-		if c.HTTPS {
-			protocol = "https"
-		}
 		now := time.Now()
 		nowUnix := strconv.FormatInt(now.Unix(), 10)
 		expDate := strconv.FormatInt(now.Add(365*24*time.Hour).Unix(), 10)
@@ -135,11 +131,11 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 				"allowed_output_formats": []string{"m3u8", "ts"},
 			},
 			"server_info": map[string]interface{}{
-				"url":             fmt.Sprintf("%s://%s", protocol, c.HostConfig.Hostname),
-				"port":            strconv.Itoa(c.AdvertisedPort),
-				"https_port":      strconv.Itoa(c.AdvertisedPort),
-				"server_protocol": protocol,
-				"rtmp_port":       strconv.Itoa(c.AdvertisedPort),
+				"url":             fmt.Sprintf("%s://%s", c.Scheme(), c.HostConfig.Hostname),
+				"port":            strconv.Itoa(c.AdvertisedHTTPPort()),
+				"https_port":      strconv.Itoa(c.AdvertisedHTTPPort()),
+				"server_protocol": c.Scheme(),
+				"rtmp_port":       strconv.Itoa(c.AdvertisedHTTPPort()),
 				"timezone":        "UTC",
 				"timestamp_now":   nowUnix,
 				"time_now":        now.UTC().Format("2006-01-02 15:04:05"),

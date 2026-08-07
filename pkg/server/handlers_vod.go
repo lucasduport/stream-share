@@ -366,38 +366,10 @@ func (c *Config) createVODDownload(ctx *gin.Context) {
 		return
 	}
 
-	// Build the public-facing download URL.
-	// Priority: PublicBaseURL > reverse proxy heuristics > hostname:port.
-	var downloadURL string
-	if base := strings.TrimRight(strings.TrimSpace(c.PublicBaseURL), "/"); base != "" {
-		downloadURL = base + "/download/" + token
-	} else {
-		protocol := "http"
-		if c.HTTPS {
-			protocol = "https"
-		}
-		hostPart := fmt.Sprintf("%s:%d", c.HostConfig.Hostname, c.HostConfig.Port)
-		if c.ReverseProxyEnabled {
-			// Behind a reverse proxy: drop the port and optionally mirror DiscordAPIURL's scheme/host.
-			if api := strings.TrimSpace(c.DiscordAPIURL); api != "" {
-				if u, err := url.Parse(api); err == nil {
-					if u.Scheme != "" {
-						protocol = u.Scheme
-					}
-					if u.Host != "" {
-						hostPart = u.Host
-					} else {
-						hostPart = c.HostConfig.Hostname
-					}
-				} else {
-					hostPart = c.HostConfig.Hostname
-				}
-			} else {
-				hostPart = c.HostConfig.Hostname
-			}
-		}
-		downloadURL = fmt.Sprintf("%s://%s/download/%s", protocol, hostPart, token)
-	}
+	// Build the public-facing download URL from the shared builder so it honors
+	// PUBLIC_BASE_URL and derives scheme/host/port consistently with the M3U and
+	// Xtream links (no duplicated scheme, no redundant default port).
+	downloadURL := c.PublicURL("/download/" + token)
 
 	utils.InfoLog("Created VOD download link for user %s, title: %s", req.Username, req.Title)
 

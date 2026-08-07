@@ -289,16 +289,12 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		// Get API URL from config, defaulting to host/port, but honor reverse proxy
 		apiURL := config.DiscordAPIURL
 		if apiURL == "" {
-			protocol := "http"
-			if config.HTTPS {
-				protocol = "https"
-			}
-			hostPart := fmt.Sprintf("%s:%d", config.HostConfig.Hostname, config.HostConfig.Port)
-			if config.ReverseProxyEnabled {
-				// Behind reverse proxy: use hostname without port by default
-				hostPart = config.HostConfig.Hostname
-			}
-			apiURL = fmt.Sprintf("%s://%s", protocol, hostPart)
+			// The bot runs in this same process and calls the local API, which only
+			// serves plain HTTP on the listening port. Default to loopback so it
+			// works regardless of the public scheme/host: a TLS-terminating proxy
+			// in front would make a public HTTPS URL unreachable from here. Set
+			// DISCORD_API_URL to override (e.g. when the bot runs elsewhere).
+			apiURL = fmt.Sprintf("http://127.0.0.1:%d", config.HostConfig.Port)
 		}
 		utils.InfoLog("Discord API URL used by bot: %s", apiURL)
 		utils.InfoLog("Reminder: Ensure 'MESSAGE CONTENT INTENT' is enabled in Discord Developer Portal for this bot.")
@@ -866,11 +862,6 @@ func (c *Config) replaceURL(uri string, trackIndex int, xtream bool) (string, er
 		return "", err
 	}
 
-	protocol := "http"
-	if c.HTTPS {
-		protocol = "https"
-	}
-
 	customEnd := strings.Trim(c.CustomEndpoint, "/")
 	if customEnd != "" {
 		customEnd = fmt.Sprintf("/%s", customEnd)
@@ -899,11 +890,10 @@ func (c *Config) replaceURL(uri string, trackIndex int, xtream bool) (string, er
 	}
 
 	newURI := fmt.Sprintf(
-		"%s://%s%s:%d%s%s",
-		protocol,
+		"%s://%s%s%s%s",
+		c.Scheme(),
 		basicAuth,
-		c.HostConfig.Hostname,
-		c.AdvertisedPort,
+		c.HostPort(),
 		customEnd,
 		uriPath,
 	)

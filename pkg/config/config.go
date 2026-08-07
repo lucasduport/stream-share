@@ -19,7 +19,9 @@
 package config
 
 import (
+	"fmt"
 	"net/url"
+	"strings"
 )
 
 // Add Debugging Logging option
@@ -160,4 +162,79 @@ type ProxyConfig struct {
 	// last probe is older than this — catching a probing loop that has silently
 	// stalled. Disabled (0) by default.
 	HealthCheckStaleMinutes int
+}
+
+// Scheme returns the URL scheme ("https" or "http") used for generated public
+// URLs, according to the HTTPS setting.
+func (c *ProxyConfig) Scheme() string {
+	if c.HTTPS {
+		return "https"
+	}
+	return "http"
+}
+
+// AdvertisedHTTPPort returns the port to advertise in generated public URLs.
+// The server itself only ever serves plain HTTP on the listening port, so an
+// HTTPS URL (or ReverseProxyEnabled) necessarily means a reverse proxy
+// terminates TLS in front and owns the public port; the internal listening port
+// is then not the public one and must not leak out. Precedence:
+//
+//	explicit ADVERTISED_PORT > 443 (HTTPS) > 80 (reverse proxy) > listening port
+func (c *ProxyConfig) AdvertisedHTTPPort() int {
+	if c.AdvertisedPort != 0 {
+		return c.AdvertisedPort
+	}
+	if c.HTTPS {
+		return 443
+	}
+	if c.ReverseProxyEnabled {
+		return 80
+	}
+	if c.HostConfig != nil {
+		return c.HostConfig.Port
+	}
+	return 0
+}
+
+// HostPort returns the authority ("host" or "host:port") for generated public
+// URLs. A port that is the default for the scheme (443 for https, 80 for http)
+// is omitted, so links read as "https://host/..." rather than
+// "https://host:443/..."; combined with AdvertisedHTTPPort this means the
+// internal listening port never appears in an HTTPS or reverse-proxied URL.
+func (c *ProxyConfig) HostPort() string {
+	var host string
+	if c.HostConfig != nil {
+		host = c.HostConfig.Hostname
+	}
+	port := c.AdvertisedHTTPPort()
+	if port == 0 || (c.HTTPS && port == 443) || (!c.HTTPS && port == 80) {
+		return host
+	}
+	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// PublicURL composes a public-facing URL for the given path (which should begin
+// with "/"). It prefers PUBLIC_BASE_URL when set; otherwise it derives
+// "scheme://host[:port]" from the host configuration. The result never contains
+// a duplicated scheme or a redundant default port, which is what previously
+// produced malformed links such as "http://https://host:8080/download/...".
+func (c *ProxyConfig) PublicURL(path string) string {
+	if base := c.publicBase(); base != "" {
+		return base + path
+	}
+	return c.Scheme() + "://" + c.HostPort() + path
+}
+
+// publicBase returns the trimmed PUBLIC_BASE_URL without a trailing slash, or ""
+// when unset. A value missing a scheme is prefixed with the configured scheme so
+// it still yields an absolute URL.
+func (c *ProxyConfig) publicBase() string {
+	base := strings.TrimSpace(c.PublicBaseURL)
+	if base == "" {
+		return ""
+	}
+	if !strings.Contains(base, "://") {
+		base = c.Scheme() + "://" + strings.TrimLeft(base, "/")
+	}
+	return strings.TrimRight(base, "/")
 }

@@ -28,6 +28,7 @@ import (
 	"github.com/lucasduport/stream-share/pkg/banner"
 	"github.com/lucasduport/stream-share/pkg/config"
 	"github.com/lucasduport/stream-share/pkg/server"
+	"github.com/lucasduport/stream-share/pkg/utils"
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -90,10 +91,24 @@ It supports:
 			config.CacheFolder += "/"
 		}
 
+		// Hostname is composed into public URLs as "<scheme>://<host>[:<port>]...".
+		// Operators sometimes include a scheme and/or a port (e.g.
+		// "https://tv.example.com:8443"), which previously produced malformed links
+		// like "http://https://tv.example.com:8443:8080/download/...". Split the
+		// value here: strip any scheme (defaulting HTTPS on when it was https) and
+		// lift an embedded port into ADVERTISED_PORT when one wasn't set explicitly,
+		// so the port is honored instead of duplicated.
+		hostname, hostnamePort, hostnameHTTPS := utils.NormalizeHostname(viper.GetString("hostname"))
+		httpsEnabled := viper.GetBool("https-enabled") || hostnameHTTPS
+		advertisedPort := viper.GetInt("advertised-port")
+		if advertisedPort == 0 {
+			advertisedPort = hostnamePort
+		}
+
 		// Create proxy configuration
 		conf := &config.ProxyConfig{
 			HostConfig: &config.HostConfiguration{
-				Hostname: viper.GetString("hostname"),
+				Hostname: hostname,
 				Port:     viper.GetInt("port"),
 			},
 			RemoteURL:            remoteHostURL,
@@ -103,8 +118,8 @@ It supports:
 			M3UCacheExpiration:   viper.GetInt("m3u-cache-expiration-hours"),
 			User:                 config.CredentialString(viper.GetString("auth-user")),
 			Password:             config.CredentialString(viper.GetString("auth-password")),
-			AdvertisedPort:       viper.GetInt("advertised-port"),
-			HTTPS:                viper.GetBool("https-enabled"),
+			AdvertisedPort:       advertisedPort,
+			HTTPS:                httpsEnabled,
 			M3UFileName:          viper.GetString("m3u-file-name"),
 			CustomEndpoint:       viper.GetString("custom-endpoint"),
 			CustomId:             viper.GetString("custom-id"),
@@ -167,10 +182,9 @@ It supports:
 			HealthCheckStaleMinutes:       viper.GetInt("healthcheck-stale-minutes"),
 		}
 
-		// Use port if advertised port is not specified
-		if conf.AdvertisedPort == 0 {
-			conf.AdvertisedPort = conf.HostConfig.Port
-		}
+		// AdvertisedPort stays 0 when neither ADVERTISED_PORT nor a port in HOSTNAME
+		// was given, so the URL builder can tell "not specified" from an explicit
+		// port and pick the right public port itself (see AdvertisedHTTPPort).
 
 		// Initialize and start the server
 		server, err := server.NewServer(conf)

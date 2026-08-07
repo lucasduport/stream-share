@@ -93,6 +93,47 @@ func containsStr(s, sub string) bool {
 	return false
 }
 
+// ---- NormalizeHostname ----
+
+func TestNormalizeHostname(t *testing.T) {
+	cases := []struct {
+		name      string
+		in        string
+		wantHost  string
+		wantPort  int
+		wantHTTPS bool
+	}{
+		{"bare host", "tv.example.com", "tv.example.com", 0, false},
+		{"empty", "", "", 0, false},
+		{"https scheme", "https://tv.example.com", "tv.example.com", 0, true},
+		{"http scheme", "http://tv.example.com", "tv.example.com", 0, false},
+		// The exact typo from issue #23: missing colon after the scheme.
+		{"https missing colon", "https//tv.example.com", "tv.example.com", 0, true},
+		{"http missing colon", "http//tv.example.com", "tv.example.com", 0, false},
+		{"scheme with port", "https://tv.example.com:8443", "tv.example.com", 8443, true},
+		{"bare host with port", "tv.example.com:8080", "tv.example.com", 8080, false},
+		{"scheme host port and path", "https://tv.example.com:8443/foo", "tv.example.com", 8443, true},
+		{"trailing slash", "https://tv.example.com/", "tv.example.com", 0, true},
+		{"scheme with path", "https://tv.example.com/download/x", "tv.example.com", 0, true},
+		{"query and fragment", "https://tv.example.com?a=b#c", "tv.example.com", 0, true},
+		{"surrounding whitespace", "  https://tv.example.com  ", "tv.example.com", 0, true},
+		{"uppercase scheme", "HTTPS://tv.example.com", "tv.example.com", 0, true},
+		{"bracketed ipv6 with port", "http://[2001:db8::1]:8080", "[2001:db8::1]", 8080, false},
+		{"bracketed ipv6 no port", "[2001:db8::1]", "[2001:db8::1]", 0, false},
+		{"bare ipv6 left intact", "2001:db8::1", "2001:db8::1", 0, false},
+		{"non-numeric port left intact", "tv.example.com:abc", "tv.example.com:abc", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotHost, gotPort, gotHTTPS := NormalizeHostname(tc.in)
+			if gotHost != tc.wantHost || gotPort != tc.wantPort || gotHTTPS != tc.wantHTTPS {
+				t.Fatalf("NormalizeHostname(%q) = (%q, %d, %v), want (%q, %d, %v)",
+					tc.in, gotHost, gotPort, gotHTTPS, tc.wantHost, tc.wantPort, tc.wantHTTPS)
+			}
+		})
+	}
+}
+
 // ---- HumanDuration ----
 
 func TestHumanDuration(t *testing.T) {
