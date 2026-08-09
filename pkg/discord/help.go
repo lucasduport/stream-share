@@ -41,11 +41,11 @@ func (b *Bot) handleHelp(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	fields := make([]*discordgo.MessageEmbedField, 0, len(userCmds)+len(adminCmds)+2)
-	fields = append(fields, &discordgo.MessageEmbedField{Name: "─── User Commands ───", Value: "​"})
+	fields = append(fields, &discordgo.MessageEmbedField{Name: "─── User Commands ───", Value: "\u200b"})
 	for i := range userCmds {
 		fields = append(fields, &userCmds[i])
 	}
-	fields = append(fields, &discordgo.MessageEmbedField{Name: "─── Admin Commands ───", Value: "​"})
+	fields = append(fields, &discordgo.MessageEmbedField{Name: "─── Admin Commands ───", Value: "\u200b"})
 	for i := range adminCmds {
 		fields = append(fields, &adminCmds[i])
 	}

@@ -26,7 +26,6 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/lucasduport/stream-share/pkg/types"
-	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
 // trimTo shortens s to at most max runes, appending … if trimmed (requires max >= 3 to include ellipsis)
@@ -88,36 +87,6 @@ func getInt64(m map[string]interface{}, k string) int64 {
 		}
 	}
 	return 0
-}
-
-// renderBar returns a textual progress bar and bytes summary
-func renderBar(done, total int64) string {
-	// 20 char bar
-	const width = 20
-	var pct int
-	if total > 0 {
-		pct = int((done * 100) / total)
-	} else {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
-	filled := (pct * width) / 100
-	if filled > width {
-		filled = width
-	}
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
-	var size string
-	switch {
-	case total > 0:
-		size = fmt.Sprintf("%s/%s", utils.HumanBytes(done), utils.HumanBytes(total))
-	case done > 0:
-		size = utils.HumanBytes(done)
-	default:
-		size = "starting…"
-	}
-	return fmt.Sprintf("`[%s]` %d%% — %s", bar, pct, size)
 }
 
 // parseQueryFilters splits the query on spaces and extracts optional SxxEyy tokens.
