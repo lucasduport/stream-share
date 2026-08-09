@@ -608,6 +608,20 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 			serveLocalFileRange(ctx, entry.FilePath, ct, sanitiseFilename(tempLink.Title)+ext, true)
 			return
 		}
+
+		// Cache miss: when VOD caching is enabled, start a background download so
+		// future requests (including downloads) serve from local disk instead of
+		// hitting upstream again. This realizes the "always cache" policy.
+		if c.VODCacheEnabled {
+			basePath := classifyStreamType(tempLink.URL, "movie")
+			defaultExt := ".mp4"
+			if basePath == "series" {
+				defaultExt = ".mkv"
+			}
+			upstream, dest, _ := c.resolveVODCacheURL(basePath, defaultExt, tempLink.StreamID)
+			expires := time.Now().Add(7 * 24 * time.Hour)
+			c.startBackgroundDownload(upstream, dest, idRaw, basePath, expires)
+		}
 	}
 
 	// Fallback: proxy upstream URL
