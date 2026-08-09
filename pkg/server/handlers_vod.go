@@ -40,12 +40,6 @@ import (
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
-// Optional timeout-aware session manager interface (non-breaking)
-type timeoutAware interface {
-	// Returns (true, until) when user is timed out; (false, zeroTime) otherwise.
-	IsUserTimedOut(username string) (bool, time.Time)
-}
-
 // searchVOD searches for VOD content matching the query
 func (c *Config) searchVOD(ctx *gin.Context) {
 	utils.DebugLog("API: VOD search request received")
@@ -65,20 +59,6 @@ func (c *Config) searchVOD(ctx *gin.Context) {
 	}
 
 	utils.DebugLog("API: Searching VOD for user %s, query: %s", req.Username, req.Query)
-
-	// Enforce timeout if supported by session manager
-	if c.sessionManager != nil {
-		if sm, ok := interface{}(c.sessionManager).(timeoutAware); ok {
-			if timedOut, until := sm.IsUserTimedOut(req.Username); timedOut {
-				utils.WarnLog("API: VOD search blocked for timed-out user %s (until %s)", req.Username, until.Format(time.RFC3339))
-				ctx.JSON(http.StatusForbidden, types.APIResponse{
-					Success: false,
-					Error:   fmt.Sprintf("User '%s' is currently timed out until %s", req.Username, until.Format(time.RFC3339)),
-				})
-				return
-			}
-		}
-	}
 
 	results, err := c.searchXtreamVOD(req.Query)
 	if err != nil {
@@ -300,20 +280,6 @@ func (c *Config) createVODDownload(ctx *gin.Context) {
 	}
 
 	utils.DebugLog("API: Creating download for user %s, stream %s, title %s", req.Username, req.StreamID, req.Title)
-
-	// Enforce timeout if supported by session manager
-	if c.sessionManager != nil {
-		if sm, ok := interface{}(c.sessionManager).(timeoutAware); ok {
-			if timedOut, until := sm.IsUserTimedOut(req.Username); timedOut {
-				utils.WarnLog("API: VOD download blocked for timed-out user %s (until %s)", req.Username, until.Format(time.RFC3339))
-				ctx.JSON(http.StatusForbidden, types.APIResponse{
-					Success: false,
-					Error:   fmt.Sprintf("User '%s' is currently timed out until %s", req.Username, until.Format(time.RFC3339)),
-				})
-				return
-			}
-		}
-	}
 
 	if c.sessionManager == nil {
 		utils.ErrorLog("Session manager is nil in createVODDownload")
