@@ -25,9 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -839,11 +837,11 @@ func (sm *SessionManager) GetClientDone(streamID, username string) (<-chan struc
 // fully reaped by cleanupExpiredSessions/DisconnectUser regardless.
 func (sm *SessionManager) RemoveClient(streamID, username string) {
 	sm.streamLock.Lock()
-	defer sm.streamLock.Unlock()
 
 	// Signal the client's HTTP handler to finish, then detach it.
 	buffer, exists := sm.streamBuffers[streamID]
 	if !exists {
+		sm.streamLock.Unlock()
 		return
 	}
 
@@ -854,13 +852,17 @@ func (sm *SessionManager) RemoveClient(streamID, username string) {
 	}
 	buffer.clientsLock.Unlock()
 
-	// This viewer is leaving the stream - close their live history row. A later
-	// resume (e.g. after a catchup pause) opens a fresh row via RequestStream.
-	sm.closeLiveHistory(username, streamID)
+	// Capture the history ID under the lock (liveHistoryMu only, no DB I/O).
+	// The DB row is closed after releasing streamLock so a synchronous DB write
+	// never blocks the global stream map.
+	historyID := sm.captureLiveHistoryID(username, streamID)
 
 	// Remove from stream session and stop the stream if last viewer
 	streamSession, exists := sm.streamSessions[streamID]
 	if !exists {
+		sm.streamLock.Unlock()
+		sm.closeHistoryRow(historyID)
+		utils.InfoLog("User %s removed from %s", username, sm.streamLabel(streamID))
 		return
 	}
 	if !streamSession.RemoveViewer(username) && buffer.active {
@@ -875,6 +877,8 @@ func (sm *SessionManager) RemoveClient(streamID, username string) {
 		}
 	}
 
+	sm.streamLock.Unlock()
+	sm.closeHistoryRow(historyID)
 	utils.InfoLog("User %s removed from %s", username, sm.streamLabel(streamID))
 }
 
@@ -987,73 +991,6 @@ func (sm *SessionManager) stopStream(streamID string) {
 	utils.DebugLog("%s stopped and all clients disconnected", sm.streamLabel(streamID))
 }
 
-// GenerateTemporaryLink creates a temporary download link
-func (sm *SessionManager) GenerateTemporaryLink(username, streamID, title, rawURL string) (string, error) {
-	// Token is a primary key in both the in-memory map and the DB; regenerate on
-	// the (vanishingly rare) collision so we never overwrite another user's link.
-	var token string
-	for attempt := 0; attempt < 5; attempt++ {
-		t, err := utils.GenerateShortToken(8)
-		if err != nil {
-			return "", fmt.Errorf("failed to generate token: %v", err)
-		}
-		sm.tempLinkLock.RLock()
-		_, exists := sm.tempLinks[t]
-		sm.tempLinkLock.RUnlock()
-		if !exists {
-			token = t
-			break
-		}
-	}
-	if token == "" {
-		return "", fmt.Errorf("failed to generate a unique token after retries")
-	}
-	expiresAt := time.Now().Add(sm.tempLinkTimeout)
-
-	tempLink := &types.TemporaryLink{
-		Token:     token,
-		Username:  username,
-		URL:       rawURL,
-		ExpiresAt: expiresAt,
-		StreamID:  streamID,
-		Title:     title,
-	}
-
-	// Store in memory
-	sm.tempLinkLock.Lock()
-	sm.tempLinks[token] = tempLink
-	sm.tempLinkLock.Unlock()
-
-	// Store in database if available
-	if sm.db != nil {
-		if err := sm.db.CreateTemporaryLink(token, username, rawURL, streamID, title, expiresAt); err != nil {
-			utils.ErrorLog("Failed to store temporary link in database: %v", err)
-		}
-	}
-
-	utils.InfoLog("Generated temporary link for user %s, expires at %v", username, expiresAt)
-	return token, nil
-}
-
-// GetTemporaryLink retrieves a temporary link by token
-func (sm *SessionManager) GetTemporaryLink(token string) (*types.TemporaryLink, error) {
-	// First check in memory
-	sm.tempLinkLock.RLock()
-	tempLink, exists := sm.tempLinks[token]
-	sm.tempLinkLock.RUnlock()
-
-	if exists && time.Now().Before(tempLink.ExpiresAt) {
-		return tempLink, nil
-	}
-
-	// If not in memory or expired, try the database
-	if sm.db != nil {
-		return sm.db.GetTemporaryLink(token)
-	}
-
-	return nil, fmt.Errorf("temporary link not found or expired")
-}
-
 // GetAllSessions returns all current user sessions
 func (sm *SessionManager) GetAllSessions() []*types.UserSession {
 	sm.userLock.RLock()
@@ -1102,228 +1039,6 @@ func (sm *SessionManager) DisconnectUser(username string) {
 	}
 
 	utils.InfoLog("User %s forcibly disconnected", username)
-}
-
-// streamUserKey identifies a (stream, user) pair for the per-view history and
-// grace-timer maps.
-func streamUserKey(streamID, username string) string { return streamID + "\x00" + username }
-
-// RegisterVODView creates a synthetic stream session so status commands see users
-// watching local files. Cached VOD is served as many short Range requests, so any
-// pending grace-period teardown for this view is cancelled here: as long as the
-// player keeps requesting, the session stays visible in /status.
-func (sm *SessionManager) RegisterVODView(username, streamID, streamType, title string) {
-	sm.cancelVODViewTimer(streamID, username)
-
-	// Record a stream_history row once per viewing session. RegisterVODView is
-	// called on every Range request; recordVODHistory de-duplicates so only the
-	// first request for a (user, stream) view inserts a row.
-	sm.recordVODHistory(username, streamID, streamType, title)
-
-	sm.userLock.Lock()
-	if sess, exists := sm.userSessions[username]; exists {
-		sess.StreamID = streamID
-		sess.StreamType = streamType
-		sess.LastActive = time.Now()
-	}
-	sm.userLock.Unlock()
-
-	sm.streamLock.Lock()
-	defer sm.streamLock.Unlock()
-	if ss, exists := sm.streamSessions[streamID]; exists {
-		ss.AddViewer(username)
-		ss.LastRequested = time.Now()
-		ss.Active = true
-		// The title passed on the very first request may have been an
-		// unresolved fallback (e.g. a transient lookup failure). Later calls
-		// (RegisterVODView runs on every Range request) can carry a properly
-		// resolved title, so adopt it once available instead of sticking with
-		// the initial fallback for the rest of the session.
-		if (ss.StreamTitle == "" || ss.StreamTitle == streamID) && title != "" && title != streamID {
-			ss.StreamTitle = title
-		}
-	} else {
-		ss := &types.StreamSession{
-			StreamID: streamID, StreamType: streamType, StreamTitle: title,
-			StartTime: time.Now(), LastRequested: time.Now(),
-			Viewers: make(map[string]time.Time), Active: true,
-		}
-		ss.AddViewer(username)
-		sm.streamSessions[streamID] = ss
-	}
-}
-
-// UnregisterVODView schedules removal of a synthetic VOD view after a grace
-// period rather than tearing it down immediately. Players fetch cached files in
-// short Range requests with gaps in between while the local buffer plays; a
-// grace window keeps the session in /status across those gaps. A subsequent
-// RegisterVODView (i.e. the next range request) cancels the pending removal.
-func (sm *SessionManager) UnregisterVODView(username, streamID string) {
-	key := streamUserKey(streamID, username)
-	sm.vodViewTimersMu.Lock()
-	if t, ok := sm.vodViewTimers[key]; ok {
-		t.Stop()
-	}
-	sm.vodViewTimers[key] = time.AfterFunc(sm.streamTimeout, func() {
-		sm.vodViewTimersMu.Lock()
-		delete(sm.vodViewTimers, key)
-		sm.vodViewTimersMu.Unlock()
-		sm.removeVODView(username, streamID)
-	})
-	sm.vodViewTimersMu.Unlock()
-}
-
-// recordVODHistory inserts a stream_history row for a VOD view the first time it
-// is seen, keyed by (stream, user). Repeat calls (subsequent Range requests) are
-// no-ops while the view is active. The row is closed in removeVODView.
-func (sm *SessionManager) recordVODHistory(username, streamID, streamType, title string) {
-	if sm.db == nil {
-		return
-	}
-	key := streamUserKey(streamID, username)
-
-	sm.vodViewTimersMu.Lock()
-	if _, exists := sm.vodHistoryIDs[key]; exists {
-		sm.vodViewTimersMu.Unlock()
-		return
-	}
-	// Reserve the slot so a concurrent Range request cannot insert a duplicate row.
-	sm.vodHistoryIDs[key] = 0
-	sm.vodViewTimersMu.Unlock()
-
-	ip, ua := "", ""
-	sm.userLock.RLock()
-	if sess, ok := sm.userSessions[username]; ok {
-		ip, ua = sess.IPAddress, sess.UserAgent
-	}
-	sm.userLock.RUnlock()
-
-	id, err := sm.db.AddStreamHistory(username, streamID, streamType, title, ip, ua)
-	if err != nil {
-		utils.ErrorLog("Failed to record VOD stream history: %v", err)
-		sm.vodViewTimersMu.Lock()
-		delete(sm.vodHistoryIDs, key)
-		sm.vodViewTimersMu.Unlock()
-		return
-	}
-	sm.vodViewTimersMu.Lock()
-	sm.vodHistoryIDs[key] = id
-	sm.vodViewTimersMu.Unlock()
-}
-
-// closeVODHistory marks a VOD view's stream_history row as ended, if one is open.
-func (sm *SessionManager) closeVODHistory(username, streamID string) {
-	key := streamUserKey(streamID, username)
-	sm.vodViewTimersMu.Lock()
-	id, ok := sm.vodHistoryIDs[key]
-	if ok {
-		delete(sm.vodHistoryIDs, key)
-	}
-	sm.vodViewTimersMu.Unlock()
-	if ok && id > 0 && sm.db != nil {
-		if err := sm.db.CloseStreamHistory(id); err != nil {
-			utils.WarnLog("Failed to close VOD stream history %d: %v", id, err)
-		}
-	}
-}
-
-// recordLiveHistory opens a stream_history row for a live viewer the first time
-// they are seen on a stream, keyed by (stream, user). The DB insert runs off the
-// caller's goroutine (callers hold streamLock) so the streaming hot path is not
-// blocked on database latency. If the viewer leaves before the insert completes,
-// the row is closed immediately when the id lands.
-func (sm *SessionManager) recordLiveHistory(username, streamID, streamType, title, ip, ua string) {
-	if sm.db == nil {
-		return
-	}
-	key := streamUserKey(streamID, username)
-
-	sm.liveHistoryMu.Lock()
-	if _, exists := sm.liveHistoryIDs[key]; exists {
-		sm.liveHistoryMu.Unlock()
-		return
-	}
-	// Reserve the slot (sentinel 0 = insert in flight) so a concurrent join for the
-	// same viewer cannot open a duplicate row.
-	sm.liveHistoryIDs[key] = 0
-	sm.liveHistoryMu.Unlock()
-
-	go func() {
-		id, err := sm.db.AddStreamHistory(username, streamID, streamType, title, ip, ua)
-		if err != nil {
-			utils.ErrorLog("Failed to record live stream history: %v", err)
-			sm.liveHistoryMu.Lock()
-			if v, ok := sm.liveHistoryIDs[key]; ok && v == 0 {
-				delete(sm.liveHistoryIDs, key)
-			}
-			sm.liveHistoryMu.Unlock()
-			return
-		}
-		sm.liveHistoryMu.Lock()
-		if v, ok := sm.liveHistoryIDs[key]; ok && v == 0 {
-			sm.liveHistoryIDs[key] = id
-			sm.liveHistoryMu.Unlock()
-			return
-		}
-		// The viewer already left before the insert completed (slot was deleted):
-		// close the freshly-created row so it does not stay open forever.
-		sm.liveHistoryMu.Unlock()
-		if err := sm.db.CloseStreamHistory(id); err != nil {
-			utils.WarnLog("Failed to close orphaned live stream history %d: %v", id, err)
-		}
-	}()
-}
-
-// closeLiveHistory marks a live viewer's stream_history row as ended, if one is
-// open. Safe to call for non-live streams and unknown viewers (no-op). Deleting a
-// still-reserved slot (id 0) signals recordLiveHistory's goroutine to close the
-// row as soon as its insert completes.
-func (sm *SessionManager) closeLiveHistory(username, streamID string) {
-	key := streamUserKey(streamID, username)
-	sm.liveHistoryMu.Lock()
-	id, ok := sm.liveHistoryIDs[key]
-	if ok {
-		delete(sm.liveHistoryIDs, key)
-	}
-	sm.liveHistoryMu.Unlock()
-	if ok && id > 0 && sm.db != nil {
-		if err := sm.db.CloseStreamHistory(id); err != nil {
-			utils.WarnLog("Failed to close live stream history %d: %v", id, err)
-		}
-	}
-}
-
-// cancelVODViewTimer stops any pending grace-period removal for a VOD view.
-func (sm *SessionManager) cancelVODViewTimer(streamID, username string) {
-	key := streamUserKey(streamID, username)
-	sm.vodViewTimersMu.Lock()
-	if t, ok := sm.vodViewTimers[key]; ok {
-		t.Stop()
-		delete(sm.vodViewTimers, key)
-	}
-	sm.vodViewTimersMu.Unlock()
-}
-
-// removeVODView detaches a user from a synthetic VOD viewing session once the
-// grace period has elapsed without further range requests.
-func (sm *SessionManager) removeVODView(username, streamID string) {
-	sm.closeVODHistory(username, streamID)
-
-	sm.userLock.Lock()
-	if sess, exists := sm.userSessions[username]; exists && sess.StreamID == streamID {
-		sess.StreamID = ""
-		sess.StreamType = ""
-	}
-	sm.userLock.Unlock()
-
-	sm.streamLock.Lock()
-	defer sm.streamLock.Unlock()
-	if ss, exists := sm.streamSessions[streamID]; exists {
-		if !ss.RemoveViewer(username) {
-			ss.Active = false
-			delete(sm.streamSessions, streamID)
-		}
-	}
 }
 
 // GetStreamInfo gets information about a specific stream
@@ -1418,122 +1133,4 @@ func (sm *SessionManager) SetClientStallTimeout(d time.Duration) {
 func (sm *SessionManager) SetSlateCache(dir string, age time.Duration) {
 	sm.slateCacheDir = dir
 	sm.slateStaleAge = age
-}
-
-// vodCacheContains reports whether path is safely inside the VOD cache directory,
-// guarding every deletion against a stray absolute path in a DB row.
-func vodCacheContains(cacheDir, path string) bool {
-	return strings.HasPrefix(filepath.Clean(path), cacheDir+string(os.PathSeparator))
-}
-
-// removeVODFile deletes a cached VOD media file and its sibling ".part" (left by
-// an interrupted download), but only when they live inside the cache directory.
-func removeVODFile(cacheDir, path string) {
-	if path == "" {
-		return
-	}
-	if !vodCacheContains(cacheDir, path) {
-		utils.WarnLog("Refusing to delete out-of-cache-dir path: %s", path)
-		return
-	}
-	for _, p := range []string{path, path + ".part"} {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			utils.WarnLog("Could not delete VOD file %s: %v", p, err)
-		}
-	}
-}
-
-// cleanupExpiredVODFiles removes entries whose expires_at has passed, deleting
-// the file (and its .part sibling) before the DB row so expiry never orphans a
-// file. Unlike the stale sweep this spans every status, so an expired failed or
-// in-progress entry is cleaned up too.
-func (sm *SessionManager) cleanupExpiredVODFiles() {
-	cacheDir := filepath.Clean(utils.VODCacheDir())
-	entries, err := sm.db.GetExpiredVODCache()
-	if err != nil {
-		utils.ErrorLog("Failed to query expired VOD cache: %v", err)
-		return
-	}
-	for _, e := range entries {
-		removeVODFile(cacheDir, e.FilePath)
-		if err := sm.db.DeleteVODCacheEntry(e.StreamID); err != nil {
-			utils.ErrorLog("Failed to remove expired VOD cache row for %s: %v", e.StreamID, err)
-		}
-	}
-	if len(entries) > 0 {
-		utils.InfoLog("Removed %d expired VOD cache entry(ies)", len(entries))
-	}
-}
-
-// cleanupStaleVODFiles deletes cached VOD files (and their DB rows) that have
-// not been accessed within vodCacheStaleAge. In-progress downloads are skipped.
-func (sm *SessionManager) cleanupStaleVODFiles() {
-	cacheDir := filepath.Clean(utils.VODCacheDir())
-
-	threshold := time.Now().Add(-sm.vodCacheStaleAge)
-	entries, err := sm.db.GetStaleVODCache(threshold)
-	if err != nil {
-		utils.ErrorLog("Failed to query stale VOD cache: %v", err)
-		return
-	}
-	for _, e := range entries {
-		removeVODFile(cacheDir, e.FilePath)
-		if err := sm.db.DeleteVODCacheEntry(e.StreamID); err != nil {
-			utils.ErrorLog("Failed to remove stale VOD cache row for %s: %v", e.StreamID, err)
-		} else {
-			utils.InfoLog("Removed stale VOD cache entry %s (last accessed %s ago)", e.StreamID, utils.HumanDuration(time.Since(e.LastAccess)))
-		}
-	}
-}
-
-// reapVODOrphans removes files in the VOD cache directory that no row references,
-// plus leftover ".part" files from failed or interrupted downloads. It only
-// deletes files idle for at least vodCacheStaleAge: an active download writes its
-// ".part" continuously, so the mtime grace keeps a live transfer safe while a
-// dead one eventually ages past the threshold.
-func (sm *SessionManager) reapVODOrphans() {
-	cacheDir := filepath.Clean(utils.VODCacheDir())
-	dirEntries, err := os.ReadDir(cacheDir)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			utils.WarnLog("VOD orphan sweep: cannot read %s: %v", cacheDir, err)
-		}
-		return
-	}
-	known, err := sm.db.ListVODCacheFilePaths()
-	if err != nil {
-		utils.ErrorLog("VOD orphan sweep: cannot list referenced files: %v", err)
-		return
-	}
-	cutoff := time.Now().Add(-sm.vodCacheStaleAge)
-	removed := 0
-	for _, de := range dirEntries {
-		if de.IsDir() {
-			continue
-		}
-		full := filepath.Join(cacheDir, de.Name())
-		// A finished media file referenced by a row is governed by that row's
-		// expiry/staleness, not this sweep. ".part" files are never referenced
-		// (rows track the final path), so they always fall through to the age check.
-		if !strings.HasSuffix(de.Name(), ".part") {
-			if _, ok := known[full]; ok {
-				continue
-			}
-		}
-		info, err := de.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(cutoff) {
-			continue // too fresh - may be an active download or a just-written file
-		}
-		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
-			utils.WarnLog("VOD orphan sweep: could not delete %s: %v", full, err)
-			continue
-		}
-		removed++
-	}
-	if removed > 0 {
-		utils.InfoLog("VOD orphan sweep: removed %d unreferenced file(s)", removed)
-	}
 }

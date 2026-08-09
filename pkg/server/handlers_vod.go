@@ -19,17 +19,14 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -349,76 +346,6 @@ func (c *Config) createVODDownload(ctx *gin.Context) {
 	})
 }
 
-// pickVODExtension tries a small set of common extensions and returns the first that appears valid for the upstream.
-// It performs quick HEAD requests with a short timeout. Falls back to .mp4 if none are conclusive.
-func (c *Config) pickVODExtension(ctx *gin.Context, basePath, streamID string) string {
-	// Allow override via env
-	order := []string{".mp4", ".ts", ".mkv", ""}
-	if v := strings.TrimSpace(c.VODExtOrder); v != "" {
-		// comma-separated, keep only known values to avoid surprises
-		parts := strings.Split(v, ",")
-		tmp := make([]string, 0, len(parts))
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == ".mp4" || p == ".mkv" || p == ".ts" || p == "" {
-				tmp = append(tmp, p)
-			}
-		}
-		if len(tmp) > 0 {
-			order = tmp
-		}
-	}
-	client := &http.Client{Timeout: 3 * time.Second}
-	for _, ext := range order {
-		probeURL := fmt.Sprintf("%s/%s/%s/%s/%s%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, streamID, ext)
-		req, reqErr := http.NewRequestWithContext(context.Background(), "HEAD", probeURL, nil)
-		if reqErr != nil {
-			utils.DebugLog("VOD probe: failed to build HEAD request for %s: %v", utils.MaskURL(probeURL), reqErr)
-			continue
-		}
-		req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-		req.Header.Set("Accept-Encoding", "identity")
-		req.Header.Set("Accept", "*/*")
-		resp, err := client.Do(req)
-		if err != nil {
-			// Providers often RST HEAD; keep this low-noise
-			utils.DebugLog("VOD probe skipped/noisy for %s: %v", utils.MaskURL(probeURL), err)
-			continue
-		}
-		_ = resp.Body.Close()
-		// Accept 2xx and 206
-		if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusPartialContent {
-			utils.DebugLog("VOD probe (HEAD) ok %d for %s", resp.StatusCode, utils.MaskURL(probeURL))
-			return ext
-		}
-		// Some providers return non-standard 461 or block HEAD; try GET range fallback
-		if resp.StatusCode == 461 || resp.StatusCode == http.StatusMethodNotAllowed || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusBadRequest {
-			utils.DebugLog("VOD probe (HEAD) status %d for %s, trying GET range fallback", resp.StatusCode, utils.MaskURL(probeURL))
-			getReq, getReqErr := http.NewRequestWithContext(context.Background(), "GET", probeURL, nil)
-			if getReqErr != nil {
-				utils.DebugLog("VOD probe: failed to build GET request for %s: %v", utils.MaskURL(probeURL), getReqErr)
-				continue
-			}
-			getReq.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-			getReq.Header.Set("Range", "bytes=0-0")
-			if getResp, getErr := client.Do(getReq); getErr == nil {
-				_, _ = io.Copy(io.Discard, getResp.Body)
-				_ = getResp.Body.Close()
-				if (getResp.StatusCode >= 200 && getResp.StatusCode < 300) || getResp.StatusCode == http.StatusPartialContent {
-					utils.DebugLog("VOD probe (GET range) ok %d for %s", getResp.StatusCode, utils.MaskURL(probeURL))
-					return ext
-				}
-				utils.DebugLog("VOD probe (GET range) status %d for %s", getResp.StatusCode, utils.MaskURL(probeURL))
-			} else {
-				utils.DebugLog("VOD probe (GET range) noisy for %s: %v", utils.MaskURL(probeURL), getErr)
-			}
-		} else {
-			utils.DebugLog("VOD probe (HEAD) status %d for %s", resp.StatusCode, utils.MaskURL(probeURL))
-		}
-	}
-	return ".mp4"
-}
-
 // getVODRequestStatus gets the status of a VOD download request
 func (c *Config) getVODRequestStatus(ctx *gin.Context) {
 	requestID := ctx.Param("requestid")
@@ -432,53 +359,6 @@ func (c *Config) getVODRequestStatus(ctx *gin.Context) {
 			"progress": 100,
 		},
 	})
-}
-
-// findVODExtensionInCache tries to locate the original extension for a given stream ID
-// by scanning the cached VOD M3U or series entries. Returns empty string if unknown.
-// vodExtCache memoises extension lookups, which are linear scans of the
-// provider's full catalogue. This is reached per HTTP Range request whenever the
-// client omits the extension and the item is not yet cached — so during a
-// download, one playback would otherwise scan the catalogue hundreds of times.
-// A miss is memoised too, since re-scanning to find nothing again is the
-// expensive case; the entry expires so a refreshed catalogue is still picked up.
-var vodExtCache sync.Map // basePath+"\x00"+streamID -> titleAttempt (title field holds the extension)
-
-func (c *Config) findVODExtensionInCache(basePath, streamID string) string {
-	key := basePath + "\x00" + streamID
-	if v, ok := vodExtCache.Load(key); ok {
-		a := v.(titleAttempt)
-		if a.title != "" || a.expires.IsZero() || time.Now().Before(a.expires) {
-			return a.title
-		}
-	}
-
-	ext := c.scanVODExtension(basePath, streamID)
-
-	a := titleAttempt{title: ext}
-	if ext == "" {
-		a.expires = time.Now().Add(titleMissRetryAfter)
-	}
-	vodExtCache.Store(key, a)
-	return ext
-}
-
-// scanVODExtension does the actual catalogue scans.
-func (c *Config) scanVODExtension(basePath, streamID string) string {
-	// First scan the cached VOD M3U for both movies and series
-	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if ext := findExtInM3U(m3uPath, basePath, streamID); ext != "" {
-			return ext
-		}
-	}
-	// Fallback: proxified main M3U if available
-	c.ensureChannelIndex()
-	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if ext := findExtInM3U(c.proxyfiedM3UPath, basePath, streamID); ext != "" {
-			return ext
-		}
-	}
-	return ""
 }
 
 // startCache starts caching a given VOD or series episode to local disk for a limited number of days (max 14)
@@ -505,7 +385,7 @@ func (c *Config) startCache(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "stream_id is required"})
 		return
 	}
-	if strings.Contains(req.StreamID, "/") || strings.Contains(req.StreamID, "..") {
+	if !isValidStreamID(req.StreamID) {
 		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "invalid stream_id"})
 		return
 	}
@@ -596,7 +476,7 @@ func (c *Config) startCache(ctx *gin.Context) {
 	}
 
 	// Spawn background download — explicit request, runs until completion regardless of viewer.
-	go c.fetchToFile(context.Background(), upstream, filename, req.StreamID, expires)
+	go c.fetchToFile(context.Background(), upstream, filename, req.StreamID, basePath, expires)
 
 	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
 		"cached":     false,
@@ -707,321 +587,4 @@ func (c *Config) listCache(ctx *gin.Context) {
 		out = append(out, item)
 	}
 	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: out})
-}
-
-// vodCacheClient is used exclusively by fetchToFile. No global timeout so large files
-// can be downloaded fully; transport-level timeouts prevent infinite stalls.
-var vodCacheClient = &http.Client{
-	Transport: &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		DisableCompression:    true,
-	},
-}
-
-// fetchToFile downloads from upstream URL to a local file; marks DB entry ready/failed.
-// On connection drops (unexpected EOF) it retries automatically using a Range header to
-// resume from the current offset, up to maxCacheRetries times. Cancelling ctx aborts the
-// download immediately, removes the partial file, and clears the DB entry.
-func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID string, expires time.Time) {
-	utils.InfoLog("Caching start: %s -> %s", utils.MaskURL(upstream), dest)
-	tmp := dest + ".part"
-
-	f, err := os.Create(tmp)
-	if err != nil {
-		utils.ErrorLog("Cache: create file error: %v", err)
-		c.cacheFail(streamID)
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	const maxCacheRetries = 5
-	var downloaded, total int64
-	lastUpdate := time.Now()
-	completed := false
-
-	for attempt := 0; attempt <= maxCacheRetries; attempt++ {
-		if ctx.Err() != nil {
-			break
-		}
-		if attempt > 0 {
-			backoff := time.Duration(attempt) * 3 * time.Second
-			utils.WarnLog("Cache: connection interrupted at %s/%s, retrying in %s (attempt %d/%d)",
-				utils.HumanBytes(downloaded), utils.HumanBytes(total), backoff, attempt, maxCacheRetries)
-			time.Sleep(backoff)
-			// Seek file to current offset so we append correctly on resume
-			if _, seekErr := f.Seek(downloaded, io.SeekStart); seekErr != nil {
-				utils.ErrorLog("Cache: seek error: %v", seekErr)
-				c.cacheFail(streamID)
-				return
-			}
-		}
-
-		req, reqErr := http.NewRequestWithContext(ctx, "GET", upstream, nil)
-		if reqErr != nil {
-			utils.ErrorLog("Cache: failed to build request: %v", reqErr)
-			c.cacheFail(streamID)
-			return
-		}
-		req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-		if downloaded > 0 {
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", downloaded))
-		}
-
-		resp, doErr := vodCacheClient.Do(req)
-		if doErr != nil {
-			utils.WarnLog("Cache: upstream error (attempt %d): %v", attempt, doErr)
-			continue
-		}
-
-		switch resp.StatusCode {
-		case http.StatusOK:
-			// Provider returned 200 despite our Range request — must restart from beginning.
-			if downloaded > 0 {
-				utils.WarnLog("Cache: provider ignored Range header, restarting download for %s", streamID)
-				downloaded = 0
-				if tErr := f.Truncate(0); tErr != nil {
-					_ = resp.Body.Close()
-					utils.ErrorLog("Cache: truncate error: %v", tErr)
-					c.cacheFail(streamID)
-					return
-				}
-				if _, sErr := f.Seek(0, io.SeekStart); sErr != nil {
-					_ = resp.Body.Close()
-					utils.ErrorLog("Cache: seek error: %v", sErr)
-					c.cacheFail(streamID)
-					return
-				}
-			}
-			if total == 0 {
-				if cl := resp.Header.Get("Content-Length"); cl != "" {
-					if v, pErr := strconv.ParseInt(cl, 10, 64); pErr == nil {
-						total = v
-					}
-				}
-			}
-		case http.StatusPartialContent:
-			// Resumed successfully — extract total from Content-Range.
-			if total == 0 {
-				if cr := resp.Header.Get("Content-Range"); cr != "" {
-					if idx := strings.LastIndex(cr, "/"); idx >= 0 {
-						if t := strings.TrimSpace(cr[idx+1:]); t != "*" {
-							if v, pErr := strconv.ParseInt(t, 10, 64); pErr == nil {
-								total = v
-							}
-						}
-					}
-				}
-			}
-		default:
-			_ = resp.Body.Close()
-			utils.WarnLog("Cache: upstream status %d (attempt %d)", resp.StatusCode, attempt)
-			continue
-		}
-
-		buf := make([]byte, 256*1024)
-		var readErr error
-		for {
-			nr, er := resp.Body.Read(buf)
-			if nr > 0 {
-				if _, ew := f.Write(buf[:nr]); ew != nil {
-					_ = resp.Body.Close()
-					utils.ErrorLog("Cache: write error: %v", ew)
-					c.cacheFail(streamID)
-					return
-				}
-				downloaded += int64(nr)
-				if c.db != nil && time.Since(lastUpdate) > vodProgressInterval {
-					// Narrow update: only the counters move, so there is no need
-					// to rewrite the whole row on every tick.
-					_ = c.db.UpdateVODProgress(streamID, downloaded, total)
-					lastUpdate = time.Now()
-				}
-			}
-			if er != nil {
-				readErr = er
-				break
-			}
-		}
-		_ = resp.Body.Close()
-
-		if readErr == io.EOF || (total > 0 && downloaded >= total) {
-			completed = true
-			break
-		}
-		// io.ErrUnexpectedEOF or other transient errors: log and retry
-		utils.WarnLog("Cache: read interrupted at %s/%s: %v", utils.HumanBytes(downloaded), utils.HumanBytes(total), readErr)
-	}
-
-	if !completed {
-		if ctx.Err() != nil {
-			utils.InfoLog("Cache: download cancelled for %s; removing partial file", streamID)
-			_ = os.Remove(tmp)
-			if c.db != nil {
-				_ = c.db.DeleteVODCacheEntry(streamID)
-			}
-			return
-		}
-		utils.ErrorLog("Cache: download failed after %d retries: %s", maxCacheRetries, utils.MaskURL(upstream))
-		c.cacheFail(streamID)
-		return
-	}
-
-	n := downloaded
-	if err := f.Sync(); err != nil {
-		utils.WarnLog("Cache: fsync warning: %v", err)
-	}
-	if err := os.Rename(tmp, dest); err != nil {
-		utils.ErrorLog("Cache: rename error: %v", err)
-		c.cacheFail(streamID)
-		return
-	}
-	utils.InfoLog("Caching done: %s (%s)", dest, utils.HumanBytes(n))
-	if c.db != nil {
-		basePath := "movie"
-		if strings.Contains(upstream, "/series/") {
-			basePath = "series"
-		}
-		var finalTitle string
-		if t := c.findVODTitleInCache(basePath, streamID); strings.TrimSpace(t) != "" {
-			finalTitle = strings.TrimSpace(t)
-		}
-		entry := &types.VODCacheEntry{StreamID: streamID, FilePath: dest, DownloadedBytes: n, TotalBytes: n, SizeBytes: n, Status: "ready", ExpiresAt: expires, LastAccess: time.Now()}
-		if finalTitle != "" {
-			entry.Title = finalTitle
-		}
-		_ = c.db.UpsertVODCache(entry)
-	}
-}
-
-// vodTouchInterval throttles last_access updates for a cached VOD item.
-//
-// The column is only read by cleanupStaleVODFiles, which compares it against a
-// multi-hour staleness window on a daily sweep, so minute granularity loses
-// nothing. Unthrottled it was a row rewrite per HTTP Range request, and one
-// playback issues hundreds — each an UPDATE, a WAL record and a dead tuple for
-// autovacuum to collect.
-const vodTouchInterval = time.Minute
-
-// vodProgressInterval is how often an in-flight download reports its byte
-// counters. The only consumer is the Discord progress readout, which nobody
-// watches at one-second resolution.
-const vodProgressInterval = 5 * time.Second
-
-var vodLastTouch sync.Map // streamID -> time.Time
-
-// touchVODCache marks a cached item as recently used, at most once per
-// vodTouchInterval per stream.
-func (c *Config) touchVODCache(streamID string) {
-	if c.db == nil {
-		return
-	}
-	now := time.Now()
-	if prev, ok := vodLastTouch.Load(streamID); ok {
-		if now.Sub(prev.(time.Time)) < vodTouchInterval {
-			return
-		}
-	}
-	vodLastTouch.Store(streamID, now)
-	if err := c.db.TouchVODCache(streamID); err != nil {
-		utils.DebugLog("vod cache: failed to touch last_access for %s: %v", streamID, err)
-	}
-}
-
-func (c *Config) cacheFail(streamID string) {
-	if c.db != nil {
-		_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: streamID, Status: "failed", LastAccess: time.Now(), ExpiresAt: time.Now().Add(2 * time.Hour)})
-	}
-}
-
-// findExtInM3U scans a given M3U file for an entry path containing basePath and having
-// the last segment starting with streamID plus an extension.
-func findExtInM3U(filePath, basePath, streamID string) string {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
-			continue
-		}
-		// Quick path filter by basePath
-		if !strings.Contains(line, "/"+basePath+"/") {
-			continue
-		}
-		u, err := url.Parse(line)
-		if err != nil {
-			continue
-		}
-		last := path.Base(u.Path)
-		if strings.HasPrefix(last, streamID+".") {
-			return path.Ext(last)
-		}
-	}
-	return ""
-}
-
-// findTitleInM3U scans for the #EXTINF title associated to a given streamID URL
-func findTitleInM3U(filePath, basePath, streamID string) string {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	lastExtinf := ""
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "#EXTINF") {
-			// Capture the text after the comma as the display title
-			if idx := strings.LastIndex(line, ","); idx != -1 && idx+1 < len(line) {
-				lastExtinf = strings.TrimSpace(line[idx+1:])
-			} else {
-				lastExtinf = ""
-			}
-			continue
-		}
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
-			continue
-		}
-		if !strings.Contains(line, "/"+basePath+"/") {
-			continue
-		}
-		u, err := url.Parse(line)
-		if err != nil {
-			continue
-		}
-		last := path.Base(u.Path)
-		if strings.HasPrefix(last, streamID+".") {
-			return lastExtinf
-		}
-		// not a match; reset extinf to avoid using wrong title for unrelated URLs
-		lastExtinf = ""
-	}
-	return ""
-}
-
-// findVODTitleInCache tries to locate the display title for a given stream ID from cached M3U(s)
-func (c *Config) findVODTitleInCache(basePath, streamID string) string {
-	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if t := findTitleInM3U(m3uPath, basePath, streamID); t != "" {
-			return t
-		}
-	}
-	c.ensureChannelIndex()
-	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if t := findTitleInM3U(c.proxyfiedM3UPath, basePath, streamID); t != "" {
-			return t
-		}
-	}
-	return ""
 }
