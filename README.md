@@ -130,9 +130,9 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 | Command | Description |
 |---------|-------------|
 | `/link <ldap_username>` | Link your Discord account with your LDAP username |
-| `/vod <query>` | Search movies and series; supports queries like `show s02e04` |
-| `/cache <title> <days>` | Cache a movie or episode on the server for 1–14 days |
-| `/cached` | List cached items and expiration times |
+| `/watch <query> [days]` | Search movies and series; pick from a dropdown to get a download link. The item is cached automatically for 1–14 days (default 7). Supports queries like `show s02e04` |
+| `/library` | List cached items and expiration times |
+| `/help` | Show all available commands and usage |
 | `/status` | Show server status — active streams, viewers, and your provider subscription's state (admin only) |
 | `/history [username] [period]` | Watch history timeline for live and VOD (admin only). Omit `username` for a feed across all clients; `period` selects the window (24h, 7d, 30d, 90d, all time) |
 | `/disconnect <ldap_username>` | Disconnect a user from the stream |
@@ -140,7 +140,9 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 
 Tips:
 - Link your account first with `/link <ldap_user>`.
+- Use `/watch` to search, download, and cache in one step — you get a link immediately while caching runs in the background.
 - Use specific queries to find episodes, e.g. `game of thrones s02e04` or `S1E1`.
+- Check `/library` to see what's cached and when items expire.
 
 ---
 
@@ -359,8 +361,8 @@ Temporary links are perfect for sharing VOD content with users who don't have St
 
 Cache movies or episodes to disk for faster start times and to reduce upstream usage:
 
-- Start a cache from Discord with `/cache <title> <days>` (1–14 days).
-- Track progress and list items with `/cached`.
+- Start a cache from Discord with `/watch <query> [days]` (1–14 days, default 7). Picking a result gives you a download link and starts caching in the background.
+- Track progress and list items with `/library`.
 - Cached items automatically serve for both downloads and VOD/series streaming endpoints when available.
 
 Configuration:
