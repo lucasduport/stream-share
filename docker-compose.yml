@@ -65,6 +65,7 @@ services:
       # Dashboard Configuration
       INSTANCE_NAME: ""                # Friendly name for this instance, returned by /api/internal/instance (defaults to hostname); useful when a dashboard combines several instances
       STREAM_TECH_PROBE_ENABLED: "false"  # Add audio/video technical info (codec, resolution, bitrate) to active live streams in the dashboard API. Samples bytes already flowing through the existing viewer connection (no extra provider connection); requires ffmpeg (bundled in this image).
+      PROVIDER_INFO_REFRESH_MINUTES: "15" # How often to re-read your IPTV provider's own subscription state (expiry, connection limit/usage) for /api/internal/provider. One tiny request per interval; raise it to make provider traffic rarer.
 
       # Provider health check — only relevant when stream-share runs behind a VPN.
       # It periodically probes one live channel so an external watchdog can tell

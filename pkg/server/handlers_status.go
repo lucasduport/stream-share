@@ -95,15 +95,23 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 		}
 	}
 
-	ctx.JSON(http.StatusOK, types.APIResponse{
-		Success: true,
-		Data: map[string]interface{}{
-			"summary":            summary,
-			"text":               b.String(),
-			"streams_count":      len(summary),
-			"users_count_total":  len(allSessions),
-			"users_count_active": len(activeUserSet),
-			"active_users":       activeUsers,
-		},
-	})
+	// Subscription state from the upstream provider, cache-only so this
+	// frequently-polled endpoint never waits on (or hits) the provider.
+	if line := c.providerStatusLine(); line != "" {
+		b.WriteString("\n" + line)
+	}
+
+	data := map[string]interface{}{
+		"summary":            summary,
+		"text":               b.String(),
+		"streams_count":      len(summary),
+		"users_count_total":  len(allSessions),
+		"users_count_active": len(activeUserSet),
+		"active_users":       activeUsers,
+	}
+	if provider := c.providerStatusBlock(); provider != nil {
+		data["provider"] = provider
+	}
+
+	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: data})
 }

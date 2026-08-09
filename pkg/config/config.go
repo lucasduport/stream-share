@@ -120,6 +120,13 @@ type ProxyConfig struct {
 	// machine hostname when unset.
 	InstanceName string
 
+	// ProviderInfoRefreshMinutes is how often the upstream provider's own
+	// subscription state (expiry, connection limit, active connections) is
+	// re-read from its player_api.php login response for the dashboard API.
+	// Those facts change on the order of days, so the default (15 minutes) is
+	// already generous; raise it to make provider traffic even rarer.
+	ProviderInfoRefreshMinutes int
+
 	// StreamTechProbeEnabled turns on best-effort audio/video technical info
 	// (codec, resolution, bitrate, ...) for active live streams, exposed via the
 	// dashboard API. It samples bytes already flowing through the existing

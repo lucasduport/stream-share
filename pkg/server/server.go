@@ -88,6 +88,11 @@ type Config struct {
 	// HealthCheckEnabled; nil means /healthz reports "disabled".
 	health *healthState
 
+	// providerInfo caches the upstream provider's subscription state. Non-nil
+	// only when an Xtream provider is configured; nil means the concept does not
+	// apply to this deployment (plain M3U) and the endpoint reports so.
+	providerInfo *providerInfoState
+
 	// inProgressDownloads guards against concurrent duplicate fetchToFile goroutines
 	inProgressDownloads sync.Map
 }
@@ -146,6 +151,12 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 			utils.WarnLog("Health check enabled but HEALTHCHECK_STREAM_ID is empty; probes will report 'error'")
 		}
 		serverConfig.health = &healthState{}
+	}
+
+	// Subscription info comes from the provider's own login response, so it only
+	// exists for Xtream-backed deployments.
+	if strings.TrimSpace(config.XtreamBaseURL) != "" {
+		serverConfig.providerInfo = &providerInfoState{}
 	}
 
 	// Force PostgreSQL initialization (sqlite removed)
@@ -376,6 +387,12 @@ func (c *Config) Serve() error {
 	nameRefreshStop := make(chan struct{})
 	c.startNameIndexRefresher(nameRefreshStop)
 	defer close(nameRefreshStop)
+
+	// Keep the provider subscription snapshot warm so dashboard requests are
+	// always served from cache instead of waiting on the provider.
+	providerInfoStop := make(chan struct{})
+	c.startProviderInfoRefresher(providerInfoStop)
+	defer close(providerInfoStop)
 
 	// Drop expired LDAP auth-cache entries so they do not linger for the life of
 	// the process. Only successes are cached, so the map is small either way.

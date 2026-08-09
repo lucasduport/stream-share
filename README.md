@@ -133,7 +133,7 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 | `/vod <query>` | Search movies and series; supports queries like `show s02e04` |
 | `/cache <title> <days>` | Cache a movie or episode on the server for 1–14 days |
 | `/cached` | List cached items and expiration times |
-| `/status` | Show server status (admin only) |
+| `/status` | Show server status — active streams, viewers, and your provider subscription's state (admin only) |
 | `/history [username] [period]` | Watch history timeline for live and VOD (admin only). Omit `username` for a feed across all clients; `period` selects the window (24h, 7d, 30d, 90d, all time) |
 | `/disconnect <ldap_username>` | Disconnect a user from the stream |
 | `/timeout <ldap_username> <minutes>` | Temporarily block a user for N minutes |
@@ -172,6 +172,7 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 | `/api/internal/history/:username?hours=N&limit=N&offset=N` | GET | Watch history for one user, paginated | X-API-Key |
 | `/api/internal/instance` | GET | Identify this deployment (name, uptime, enabled features) — for labeling data in a multi-instance dashboard | X-API-Key |
 | `/api/internal/stats?hours=N` | GET | Aggregate dashboard stats: live activity plus historical totals and top titles/users over the window (default 24h, `hours=0` for all-time) | X-API-Key |
+| `/api/internal/provider` | GET | Your IPTV provider's own view of the subscription behind this instance: status, expiry, trial flag, connection limit and usage — see [Provider subscription info](#provider-subscription-info) | X-API-Key |
 | `/api/internal/health` | GET | Force a fresh provider health probe (rate-limited) and return the verdict — see [Provider Health Check](#provider-health-check) | X-API-Key |
 | `/api/internal/ip-aliases` | GET | List all configured IP -> alias mappings | X-API-Key |
 | `/api/internal/ip-aliases` | POST | Create or replace the alias for an IP address — body `{"ip_address": "...", "alias": "..."}` | X-API-Key |
@@ -188,6 +189,7 @@ Everything above is machine-readable JSON (`{success, data, error}`) and is enou
 - **Watch history**: `/api/internal/history` (global) or `/api/internal/history/:username`, both paginated with `limit`/`offset` and filterable with `hours`.
 - **VOD search**: `/api/internal/vod/search` — the same live provider search used by the `/vod` Discord command.
 - **Overview stats**: `/api/internal/stats` for counts and leaderboards to show on a summary page.
+- **Subscription**: `/api/internal/provider` for how long the upstream subscription still has to run and how much of its connection allowance is in use.
 - **Multi-instance**: this API has no built-in concept of "instance" or "tenant" — each deployment is independent, with its own database and API key. Call `/api/internal/instance` on each one to fetch a stable display name (set via `INSTANCE_NAME`, see below) and combine results client-side by polling each instance's base URL with its own API key.
 
 #### Viewer identity and IP aliases
@@ -207,6 +209,48 @@ Every endpoint that surfaces a viewer identity then includes a resolved `display
 This also flows into Discord:
 - `/status`'s viewer list shows `Alias (raw IP)` when an alias is set (or just the raw identifier when it isn't), so you always see both at a glance.
 - `/history` accepts either `username` (raw IP or LDAP username) or `alias` — not both — to drill into one viewer's timeline; the embed title shows the resolved alias either way.
+
+#### Provider subscription info
+
+Xtream providers report the state of your own account in their `player_api.php` login response — the facts that live outside stream-share's database: when the subscription runs out, whether it's a trial, how many simultaneous connections it allows, and how many of them are in use right now. `GET /api/internal/provider` reads that and hands it back normalized:
+
+```json
+{
+  "configured": true,
+  "authenticated": true,
+  "status": "Active",
+  "active": true,
+  "expired": false,
+  "is_trial": false,
+  "expires_at": "2026-11-01T00:00:00Z",
+  "expires_in_seconds": 7344000,
+  "days_remaining": 85,
+  "created_at": "2023-07-22T06:26:40Z",
+  "active_connections": 2,
+  "max_connections": 4,
+  "connections_available": 2,
+  "local_upstream_connections": 1,
+  "allowed_output_formats": ["m3u8", "ts"],
+  "server_timezone": "Europe/Amsterdam",
+  "server_time": "2026-08-07 12:00:00",
+  "checked_at": "2026-08-07T10:00:00Z",
+  "age_seconds": 42,
+  "stale": false
+}
+```
+
+Reading it:
+
+- **`active`** is the one boolean a status light needs: the provider accepted our credentials, reports the account as `Active`, and the expiry date (if any) hasn't passed. `status` is the provider's own wording, passed through unchanged — panels differ, and you recognize yours.
+- **`authenticated: false`** means the provider is rejecting your credentials outright, which is worth alerting on separately from an expiry: nothing will play, but the account may well still be valid.
+- **`active_connections` vs `local_upstream_connections`**: the first is the provider's count across *every* device on the account, the second is how many connections this instance is holding open — one per active shared stream, no matter how many viewers each is serving. Seeing them side by side is what makes the multiplexing visible, and tells you whether a connection limit is being spent somewhere other than here.
+- **Unlimited or unreported values are omitted rather than zeroed**: an account with no expiry has `"expires_at": null` and `"unlimited": true` and no `days_remaining`; a provider that reports no connection limit has neither `max_connections` nor `connections_available`. A dashboard can therefore tell "unlimited"/"unknown" apart from a real value.
+- **`stale` / `error`**: when a refresh fails after an earlier success, the last known values keep being served with `stale: true` and an `error` describing the failure, rather than passing old numbers off as current. If *nothing* has ever been read successfully, the endpoint returns `502` with the failure in `error`.
+- **Non-Xtream deployments** (plain M3U, no `XTREAM_BASE_URL`) get `200` with `{"configured": false}` — the concept doesn't apply, so a dashboard can hide the panel instead of showing an error.
+
+The snapshot is refreshed in the background every `PROVIDER_INFO_REFRESH_MINUTES` (default 15) and requests are served from that cache, so polling this endpoint costs nothing upstream. `?refresh=true` asks for a fresh read; refreshes — forced or not — are spaced at least 30 seconds apart and never run concurrently, so no amount of dashboard polling can turn into a login flood against your provider. A throttled response carries the header `X-Provider-Info-Throttled: true` and is otherwise the normal cached body.
+
+A compact version of the same snapshot (cache-only, never a provider request) also rides along on `/api/internal/status` as a `provider` object, and as a `Subscription: Active — 85 day(s) left — 2/4 connection(s) in use` line at the end of its `text` summary — which is what Discord's `/status` command displays.
 
 #### Technical stream info (`tech`)
 
@@ -249,6 +293,8 @@ To override, set `INTERNAL_API_KEY` in the environment so the bot and integratio
 Set `INSTANCE_NAME` to give this deployment a stable display name (defaults to the machine hostname), returned by `/api/internal/instance` — useful when a dashboard combines data from multiple stream-share instances.
 
 Set `STREAM_TECH_PROBE_ENABLED=true` to enable the `tech` (audio/video technical info) field on active live streams — see [Technical stream info](#technical-stream-info-tech) above.
+
+Set `PROVIDER_INFO_REFRESH_MINUTES` (default `15`) to control how often your provider's subscription state is re-read for `/api/internal/provider` — see [Provider subscription info](#provider-subscription-info) above. Subscription facts change on the order of days, so the default is already generous; raise it to make provider traffic rarer.
 
 ---
 
