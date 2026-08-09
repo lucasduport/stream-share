@@ -71,6 +71,14 @@ func (a *AccountInfo) Expired() bool {
 	return a != nil && a.ExpiresAt != nil && time.Now().After(*a.ExpiresAt)
 }
 
+// Active reports whether the provider considers the subscription in good
+// standing: credentials were accepted, the expiry date (if any) has not
+// passed, and the provider's status word is "Active" or absent.
+func (a *AccountInfo) IsActive() bool {
+	return a != nil && a.Auth && !a.Expired() &&
+		(a.Status == "" || strings.EqualFold(a.Status, "Active"))
+}
+
 // AccountInfo fetches the upstream subscription state from the provider.
 //
 // Calling player_api.php with credentials but no action returns the panel's

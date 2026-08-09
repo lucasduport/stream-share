@@ -202,11 +202,8 @@ func (c *Config) renderProviderInfo(snap providerInfoSnapshot) map[string]interf
 		"age_seconds":        int64(time.Since(info.FetchedAt).Seconds()),
 	}
 
-	// "active" is the single boolean a dashboard needs for a green/red light:
-	// the provider says Active, it accepted our credentials, and the expiry
-	// date (if any) has not passed.
-	data["active"] = info.Auth && !info.Expired() &&
-		(info.Status == "" || strings.EqualFold(info.Status, "Active"))
+	// "active" is the single boolean a dashboard needs for a green/red light.
+	data["active"] = info.IsActive()
 
 	if info.Message != "" {
 		data["message"] = info.Message
@@ -283,7 +280,7 @@ func (c *Config) providerStatusBlock() map[string]interface{} {
 	info := snap.Info
 	block := map[string]interface{}{
 		"status":             info.Status,
-		"active":             info.Auth && !info.Expired() && (info.Status == "" || strings.EqualFold(info.Status, "Active")),
+		"active":             info.IsActive(),
 		"expired":            info.Expired(),
 		"is_trial":           info.IsTrial,
 		"active_connections": info.ActiveConnections,
