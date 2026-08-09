@@ -19,6 +19,7 @@
 package discord
 
 import (
+	"strings"
 	"fmt"
 	"net/url"
 
@@ -74,4 +75,56 @@ func (b *Bot) handleTimeout(s *discordgo.Session, m *discordgo.MessageCreate, ar
 		return
 	}
 	b.success(m.ChannelID, "✅ Timeout Applied", fmt.Sprintf("User **%s** has been timed out for **%d** minutes.", username, minutes))
+}
+
+// handleLinkAdmin allows an admin to link any Discord user to any LDAP account
+func (b *Bot) handleLinkAdmin(s *discordgo.Session, m *discordgo.MessageCreate, args []string) {
+	if len(args) != 2 {
+		b.info(m.ChannelID, "🔗 Link User (Admin)", "Usage: `!linkadmin <discord_user_id> <ldap_username>`\n\nThis links any Discord user to an LDAP account (admin only).")
+		return
+	}
+	
+	discordID := strings.TrimSpace(args[0])
+	ldapUser := strings.TrimSpace(args[1])
+	
+	if discordID == "" || ldapUser == "" {
+		b.fail(m.ChannelID, "❌ Link Failed", "Both Discord ID and LDAP username are required.")
+		return
+	}
+
+	// Get Discord user info to get the username
+	var discordName string
+	if m.GuildID != "" {
+		// Try to get user from guild
+		member, err := s.GuildMember(m.GuildID, discordID)
+		if err == nil && member != nil && member.User != nil {
+			discordName = member.User.Username
+		} else {
+			// Fallback to just using the ID as name
+			discordName = discordID
+		}
+	} else {
+		// Direct message context
+		user, err := s.User(discordID)
+		if err == nil && user != nil {
+			discordName = user.Username
+		} else {
+			discordName = discordID
+		}
+	}
+
+	payload := map[string]interface{}{"discord_id": discordID, "discord_name": discordName, "ldap_user": ldapUser}
+	ok, resp, err := b.makeAPIRequest("POST", "/discord/link/admin", payload)
+	if err != nil || !ok {
+		b.fail(m.ChannelID, "❌ Link Failed", fmt.Sprintf("We couldn't link this user right now.\n\nError: `%v`", err))
+		return
+	}
+
+	confirmed := ldapUser
+	if data, ok := resp.(map[string]interface{}); ok {
+		if u, exists := data["ldap_user"]; exists {
+			confirmed = fmt.Sprintf("%v", u)
+		}
+	}
+	b.success(m.ChannelID, "✅ Linked Successfully (Admin)", fmt.Sprintf("Discord user **%s** (%s) is now linked to LDAP account `%s`.", discordName, discordID, confirmed))
 }

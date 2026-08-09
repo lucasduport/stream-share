@@ -46,6 +46,15 @@ func (b *Bot) commandSpecs() []*discordgo.ApplicationCommand {
 			},
 		},
 		{
+			Name:                     "linkadmin",
+			Description:              "Link any Discord user to an LDAP account (admin only)",
+			DefaultMemberPermissions: int64Ptr(discordgo.PermissionManageGuild),
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "discord_id", Description: "Discord user ID to link", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "ldap_username", Description: "LDAP username to link to", Required: true},
+			},
+		},
+		{
 			Name:        "cache",
 			Description: "Cache a movie/episode on the server (max 14 days)",
 			Options: []*discordgo.ApplicationCommandOption{
@@ -207,6 +216,23 @@ func (b *Bot) handleApplicationCommand(s *discordgo.Session, i *discordgo.Intera
 		// Reuse existing handler via a minimal MessageCreate without legacy prefix
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleLink(s, mc, []string{username})
+
+	case "linkadmin":
+		if !b.isAdmin(i.Member) {
+			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Flags:   discordgo.MessageFlagsEphemeral,
+					Content: "You don't have permission to use this command.",
+				},
+			})
+			return
+		}
+		discordID := optString(i, "discord_id")
+		ldapUser := optString(i, "ldap_username")
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Linking user..."}})
+		mc := toMessageCreateFromInteraction(i, "")
+		b.handleLinkAdmin(s, mc, []string{discordID, ldapUser})
 
 	case "vod":
 		query := optString(i, "query")

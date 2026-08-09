@@ -73,6 +73,7 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 
 	// Discord integration endpoints
 	api.POST("/discord/link", c.linkDiscordUser)
+	api.POST("/discord/link/admin", c.linkDiscordUserAdmin)
 	api.GET("/discord/:discordid/ldap", c.getLDAPFromDiscord)
 
 	// VOD search and download endpoints
