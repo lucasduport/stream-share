@@ -20,7 +20,6 @@ package utils
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"strconv"
@@ -139,18 +138,23 @@ func HumanBytes(b int64) string {
 	return fmt.Sprintf("%.1f %s", float64(b)/float64(div), pre[exp])
 }
 
-// GenerateShortToken generates a random alphanumeric token of the specified length.
-// It uses cryptographically secure random number generation.
-// The token uses hex encoding which gives us [0-9a-f] characters.
+// tokenAlphabet is the base62 alphabet used for short tokens: 0-9, A-Z, a-z.
+// Eight characters over this alphabet give ~47 bits of entropy, far fewer
+// collisions than a hex token of the same length while staying remote-friendly.
+const tokenAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+// GenerateShortToken returns a cryptographically-random token of the given
+// length over the base62 tokenAlphabet. A non-positive length defaults to 8.
 func GenerateShortToken(length int) (string, error) {
 	if length <= 0 {
 		length = 8
 	}
-	// Each hex character represents 4 bits, so we need length/2 bytes
-	// But we generate extra bytes and truncate to handle odd lengths
-	bytes := make([]byte, (length+1)/2)
-	if _, err := rand.Read(bytes); err != nil {
+	buf := make([]byte, length)
+	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes)[:length], nil
+	for i, c := range buf {
+		buf[i] = tokenAlphabet[int(c)%len(tokenAlphabet)]
+	}
+	return string(buf), nil
 }

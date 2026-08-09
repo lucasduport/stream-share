@@ -211,110 +211,73 @@ func (b *Bot) handleApplicationCommand(s *discordgo.Session, i *discordgo.Intera
 	switch name {
 	case "link":
 		username := optString(i, "username")
-		// Immediate ephemeral ack to avoid spinner
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Linking…"}})
-		// Reuse existing handler via a minimal MessageCreate without legacy prefix
+		ackEphemeral(s, i, "Linking…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleLink(s, mc, []string{username})
 
 	case "linkadmin":
-		if !b.isAdmin(i.Member) {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Flags:   discordgo.MessageFlagsEphemeral,
-					Content: "You don't have permission to use this command.",
-				},
-			})
+		if !b.requireAdmin(s, i) {
 			return
 		}
 		discordID := optString(i, "discord_id")
 		ldapUser := optString(i, "ldap_username")
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Linking user..."}})
+		ackEphemeral(s, i, "Linking…")
 		mc := toMessageCreateFromInteraction(i, "")
-		b.handleLinkAdmin(s, mc, []string{discordID, ldapUser})
+		b.linkDiscordAdmin(s, mc, []string{discordID, ldapUser})
 
 	case "vod":
 		query := optString(i, "query")
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Searching…"}})
+		ackEphemeral(s, i, "Searching…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleVOD(s, mc, strings.Fields(query))
 
 	case "cache":
 		title := optString(i, "title")
 		days := int(optInt(i, "days"))
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Preparing cache…"}})
+		ackEphemeral(s, i, "Preparing cache…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleCache(s, mc, append(strings.Fields(title), strconv.Itoa(days)))
 
 	case "cached":
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Fetching cached list…"}})
+		ackEphemeral(s, i, "Fetching cached list…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleCachedList(s, mc)
 
 	case "status":
-		if !b.isAdmin(i.Member) {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Flags:   discordgo.MessageFlagsEphemeral,
-					Content: "You don't have permission to use this command.",
-				},
-			})
+		if !b.requireAdmin(s, i) {
 			return
 		}
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Getting status…"}})
+		ackEphemeral(s, i, "Getting status…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleStatus(s, mc, nil)
 
 	case "history":
-		if !b.isAdmin(i.Member) {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Flags:   discordgo.MessageFlagsEphemeral,
-					Content: "You don't have permission to use this command.",
-				},
-			})
+		if !b.requireAdmin(s, i) {
 			return
 		}
 		username := optString(i, "username")
 		alias := optString(i, "alias")
 		hours := periodToHours(optString(i, "period"))
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Fetching history…"}})
+		ackEphemeral(s, i, "Fetching history…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleHistory(s, mc, username, alias, hours)
 
 	case "disconnect":
-		if !b.isAdmin(i.Member) {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Flags:   discordgo.MessageFlagsEphemeral,
-					Content: "You don't have permission to use this command.",
-				},
-			})
+		if !b.requireAdmin(s, i) {
 			return
 		}
 		username := optString(i, "username")
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Disconnecting…"}})
+		ackEphemeral(s, i, "Disconnecting…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleDisconnect(s, mc, []string{username})
 
 	case "timeout":
-		if !b.isAdmin(i.Member) {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Flags:   discordgo.MessageFlagsEphemeral,
-					Content: "You don't have permission to use this command.",
-				},
-			})
+		if !b.requireAdmin(s, i) {
 			return
 		}
 		username := optString(i, "username")
 		minutes := int(optInt(i, "minutes"))
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Applying timeout…"}})
+		ackEphemeral(s, i, "Applying timeout…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleTimeout(s, mc, []string{username, fmt.Sprintf("%d", minutes)})
 	}
@@ -336,6 +299,28 @@ func optInt(i *discordgo.InteractionCreate, name string) int64 {
 		}
 	}
 	return 0
+}
+
+// requireAdmin checks the caller's admin role and, on failure, replies with an
+// ephemeral permission-denied message. Returns true when access is granted, so
+// callers can write `if !b.requireAdmin(s, i) { return }`.
+func (b *Bot) requireAdmin(s *discordgo.Session, i *discordgo.InteractionCreate) bool {
+	if b.isAdmin(i.Member) {
+		return true
+	}
+	ackEphemeral(s, i, "You don't have permission to use this command.")
+	return false
+}
+
+// ackEphemeral sends an ephemeral "working on it" reply to clear Discord's spinner.
+func ackEphemeral(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Flags:   discordgo.MessageFlagsEphemeral,
+			Content: content,
+		},
+	})
 }
 
 // toMessageCreateFromInteraction builds a minimal MessageCreate to reuse legacy handlers

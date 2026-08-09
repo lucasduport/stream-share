@@ -32,7 +32,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/lucasduport/stream-share/pkg/catchup"
 	"github.com/lucasduport/stream-share/pkg/database"
 	"github.com/lucasduport/stream-share/pkg/slate"
@@ -110,7 +109,7 @@ type SessionManager struct {
 // The upstream is read once and fanned out to every client attached to the same
 // stream. Delivery is back-pressured: the pump does not advance to the next
 // upstream chunk until every client has accepted the current one (or been
-// dropped). With a single client this reproduces a direct proxy — the upstream
+// dropped). With a single client this reproduces a direct proxy - the upstream
 // read rate is gated by how fast that client drains, so TCP back-pressure flows
 // all the way to the provider and the stream stays smooth. With multiple clients
 // the pump runs at the rate of the slowest healthy client; the per-client buffer
@@ -162,7 +161,7 @@ type StreamBuffer struct {
 	// HTTP handler can decide what to send before it commits to a 200. startErr
 	// is nil on success and set when the upstream failed before delivering any
 	// byte. slateOK records whether this stream type may be replaced by an error
-	// slate (live/timeshift only — VOD is served over byte ranges).
+	// slate (live/timeshift only - VOD is served over byte ranges).
 	ready      chan struct{}
 	readyOnce  sync.Once
 	startErrMu sync.Mutex
@@ -528,7 +527,7 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 	if existingBuffer, exists := sm.streamBuffers[streamID]; exists && existingBuffer.active {
 		utils.InfoLog("User %s joined existing %s (multiplexed)", username, sm.streamLabel(streamID))
 
-		// A viewer returned — cancel any pending pause-grace stop.
+		// A viewer returned - cancel any pending pause-grace stop.
 		if sm.cancelPendingStop(streamID) {
 			utils.DebugLog("%s resumed before pause grace expired; continuing uninterrupted", sm.streamLabel(streamID))
 		}
@@ -611,7 +610,7 @@ func newStreamClient() *streamClient {
 // deliver enqueues a chunk for one client, applying back-pressure.
 //
 // When sole is true (the only viewer) it blocks until the client accepts the
-// chunk or disconnects — reproducing a direct connection's TCP back-pressure.
+// chunk or disconnects - reproducing a direct connection's TCP back-pressure.
 // With multiple viewers it still blocks (so the pump tracks the slowest client),
 // but a client whose buffer stays full past clientStallTimeout is dropped so it
 // cannot freeze the shared upstream for everyone else. Returns true if dropped.
@@ -834,7 +833,7 @@ func (sm *SessionManager) GetClientDone(streamID, username string) (<-chan struc
 // HTTP connection looks identical whether the user is switching channels or
 // "pausing" (TiviMate disconnects, then resumes later via timeshift). Leaving
 // the previous stream ID in place lets RequestStream's switch-detection work
-// correctly regardless of request ordering — it overwrites StreamID when the
+// correctly regardless of request ordering - it overwrites StreamID when the
 // user starts a genuinely different stream, and converts any pending
 // pause-grace stop on the old stream into an immediate one. Idle sessions are
 // fully reaped by cleanupExpiredSessions/DisconnectUser regardless.
@@ -855,7 +854,7 @@ func (sm *SessionManager) RemoveClient(streamID, username string) {
 	}
 	buffer.clientsLock.Unlock()
 
-	// This viewer is leaving the stream — close their live history row. A later
+	// This viewer is leaving the stream - close their live history row. A later
 	// resume (e.g. after a catchup pause) opens a fresh row via RequestStream.
 	sm.closeLiveHistory(username, streamID)
 
@@ -889,7 +888,7 @@ func (sm *SessionManager) stopStreamLocking(streamID string) {
 
 // schedulePendingStop delays stopping streamID by sm.pauseGrace instead of
 // stopping it immediately, keeping the upstream pump (and catchup recording)
-// alive in case the viewer resumes — e.g. TiviMate "pauses" by disconnecting
+// alive in case the viewer resumes - e.g. TiviMate "pauses" by disconnecting
 // and later resumes via a timeshift request. The caller must hold streamLock.
 func (sm *SessionManager) schedulePendingStop(streamID string) {
 	if _, exists := sm.pendingStops[streamID]; exists {
@@ -916,7 +915,7 @@ func (sm *SessionManager) schedulePendingStop(streamID string) {
 	}()
 }
 
-// cancelPendingStop cancels a scheduled stop for streamID, if any (silently —
+// cancelPendingStop cancels a scheduled stop for streamID, if any (silently -
 // callers that represent a genuine "viewer returned" event should log that
 // themselves; this is also called from stopStream itself, where logging
 // "resumed" would be misleading). The caller must hold streamLock.
@@ -944,7 +943,7 @@ func (sm *SessionManager) NotifyCatchupActivity(streamID string) {
 // stopStream stops an active stream and disconnects all of its clients.
 // The caller must hold sm.streamLock.
 func (sm *SessionManager) stopStream(streamID string) {
-	// Cancel any scheduled pause-grace stop — we're stopping for real now
+	// Cancel any scheduled pause-grace stop - we're stopping for real now
 	// (e.g. the viewer switched to a different channel).
 	sm.cancelPendingStop(streamID)
 
@@ -990,9 +989,24 @@ func (sm *SessionManager) stopStream(streamID string) {
 
 // GenerateTemporaryLink creates a temporary download link
 func (sm *SessionManager) GenerateTemporaryLink(username, streamID, title, rawURL string) (string, error) {
-	token, err := utils.GenerateShortToken(8)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate token: %v", err)
+	// Token is a primary key in both the in-memory map and the DB; regenerate on
+	// the (vanishingly rare) collision so we never overwrite another user's link.
+	var token string
+	for attempt := 0; attempt < 5; attempt++ {
+		t, err := utils.GenerateShortToken(8)
+		if err != nil {
+			return "", fmt.Errorf("failed to generate token: %v", err)
+		}
+		sm.tempLinkLock.RLock()
+		_, exists := sm.tempLinks[t]
+		sm.tempLinkLock.RUnlock()
+		if !exists {
+			token = t
+			break
+		}
+	}
+	if token == "" {
+		return "", fmt.Errorf("failed to generate a unique token after retries")
 	}
 	expiresAt := time.Now().Add(sm.tempLinkTimeout)
 
@@ -1323,7 +1337,7 @@ func (sm *SessionManager) GetStreamInfo(streamID string) (*types.StreamSession, 
 
 // CaptureStreamSample returns up to maxBytes of upstream data for an actively
 // buffered (multiplexed live) stream, sampled from bytes already flowing
-// through its existing pump — it does NOT open any additional connection to
+// through its existing pump - it does NOT open any additional connection to
 // the provider. Returns an error if the stream has no active shared buffer
 // (e.g. it is a VOD view, which has no persistent upstream connection to tap).
 // If the timeout elapses before maxBytes is reached, whatever was captured so
@@ -1511,7 +1525,7 @@ func (sm *SessionManager) reapVODOrphans() {
 			continue
 		}
 		if info.ModTime().After(cutoff) {
-			continue // too fresh — may be an active download or a just-written file
+			continue // too fresh - may be an active download or a just-written file
 		}
 		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
 			utils.WarnLog("VOD orphan sweep: could not delete %s: %v", full, err)

@@ -73,7 +73,6 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 
 	// Discord integration endpoints
 	api.POST("/discord/link", c.linkDiscordUser)
-	api.POST("/discord/link/admin", c.linkDiscordUserAdmin)
 	api.GET("/discord/:discordid/ldap", c.getLDAPFromDiscord)
 
 	// VOD search and download endpoints
@@ -104,7 +103,7 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 	api.GET("/instance", c.getInstanceInfo)
 	api.GET("/stats", c.getDashboardStats)
 
-	// IP alias management — assign a friendly name to a client IP, which is
+	// IP alias management - assign a friendly name to a client IP, which is
 	// the de-facto viewer identity when LDAP is disabled
 	api.GET("/ip-aliases", c.listIPAliases)
 	api.POST("/ip-aliases", c.upsertIPAlias)

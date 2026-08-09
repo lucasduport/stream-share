@@ -28,7 +28,13 @@ import (
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
-// LinkDiscordToLDAP maps a Discord user ID to an LDAP username
+// LinkDiscordToLDAP maps a Discord user ID to an LDAP username.
+//
+// ldap_username is UNIQUE in discord_ldap_mapping, so if that LDAP user is
+// already linked to a different Discord account the stale mapping is removed
+// first; the upsert then makes the target Discord account the sole owner of
+// the LDAP user. Both steps run in one transaction, so a concurrent link for
+// the same LDAP user cannot leave it half-applied.
 func (m *DBManager) LinkDiscordToLDAP(discordID, discordName, ldapUsername string) error {
 	utils.DebugLog("Database: Linking Discord ID %s (%s) to LDAP user %s", discordID, discordName, ldapUsername)
 	if m == nil || m.db == nil {
@@ -37,7 +43,24 @@ func (m *DBManager) LinkDiscordToLDAP(discordID, discordName, ldapUsername strin
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stmt := `
+
+	tx, err := m.db.BeginTx(ctx, nil)
+	if err != nil {
+		utils.ErrorLog("Database error beginning link transaction: %v", err)
+		return err
+	}
+	defer tx.Rollback() // no-op after Commit
+
+	// Relinquish any prior mapping that holds this LDAP user on a different Discord account.
+	if _, err := tx.ExecContext(ctx, `
+        DELETE FROM discord_ldap_mapping
+        WHERE ldap_username = $1 AND discord_id <> $2
+    `, ldapUsername, discordID); err != nil {
+		utils.ErrorLog("Database error clearing prior LDAP link: %v", err)
+		return err
+	}
+
+	const upsert = `
         INSERT INTO discord_ldap_mapping (discord_id, discord_name, ldap_username)
         VALUES ($1, $2, $3)
         ON CONFLICT(discord_id) DO UPDATE SET
@@ -45,9 +68,13 @@ func (m *DBManager) LinkDiscordToLDAP(discordID, discordName, ldapUsername strin
           ldap_username = EXCLUDED.ldap_username,
           last_active = CURRENT_TIMESTAMP
     `
-	_, err := m.db.ExecContext(ctx, stmt, discordID, discordName, ldapUsername)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, upsert, discordID, discordName, ldapUsername); err != nil {
 		utils.ErrorLog("Database error linking Discord to LDAP: %v", err)
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		utils.ErrorLog("Database error committing link transaction: %v", err)
 		return err
 	}
 	utils.InfoLog("Successfully linked Discord ID %s to LDAP user %s", discordID, ldapUsername)
@@ -106,58 +133,4 @@ func (m *DBManager) GetDiscordByLDAPUser(ldapUsername string) (string, string, e
 	}
 	utils.DebugLog("Found Discord ID %s (%s) for LDAP user %s", discordID, discordName, ldapUsername)
 	return discordID, discordName, nil
-}
-
-// LinkDiscordToLDAPAdmin allows an admin to link any Discord user to any LDAP account
-// This bypasses the normal self-service linking and allows manual mapping
-func (m *DBManager) LinkDiscordToLDAPAdmin(discordID, discordName, ldapUsername string) error {
-	utils.DebugLog("Database: Admin linking Discord ID %s (%s) to LDAP user %s", discordID, discordName, ldapUsername)
-	if m == nil || m.db == nil {
-		return fmt.Errorf("database not initialized")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	
-	// First, check if the LDAP username is already linked to a different Discord account
-	var existingDiscordID string
-	err := m.db.QueryRowContext(ctx, `
-        SELECT discord_id FROM discord_ldap_mapping
-        WHERE ldap_username = $1
-    `, ldapUsername).Scan(&existingDiscordID)
-	
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		utils.ErrorLog("Database error checking existing LDAP link: %v", err)
-		return err
-	}
-	
-	// If the LDAP username is already linked to a different Discord account, unlink it first
-	if existingDiscordID != "" && existingDiscordID != discordID {
-		utils.InfoLog("LDAP user %s is already linked to Discord ID %s, unlinking first", ldapUsername, existingDiscordID)
-		_, err = m.db.ExecContext(ctx, `
-			DELETE FROM discord_ldap_mapping
-			WHERE ldap_username = $1
-		`, ldapUsername)
-		if err != nil {
-			utils.ErrorLog("Database error unlinking existing LDAP user: %v", err)
-			return err
-		}
-	}
-	
-	// Now insert/update the new mapping
-	stmt := `
-        INSERT INTO discord_ldap_mapping (discord_id, discord_name, ldap_username)
-        VALUES ($1, $2, $3)
-        ON CONFLICT(discord_id) DO UPDATE SET
-          discord_name = EXCLUDED.discord_name,
-          ldap_username = EXCLUDED.ldap_username,
-          last_active = CURRENT_TIMESTAMP
-    `
-	_, err = m.db.ExecContext(ctx, stmt, discordID, discordName, ldapUsername)
-	if err != nil {
-		utils.ErrorLog("Database error linking Discord to LDAP (admin): %v", err)
-		return err
-	}
-	utils.InfoLog("Successfully linked Discord ID %s to LDAP user %s (admin)", discordID, ldapUsername)
-	return nil
 }
