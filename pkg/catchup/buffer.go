@@ -178,15 +178,16 @@ func (b *DiskBuffer) rotate(oldFile *os.File) *os.File {
 	return f
 }
 
-// Write enqueues a copy of p for async disk write. Never blocks; drops if channel full.
+// Write enqueues p for async disk write. Never blocks; drops if channel full.
+// The caller must pass a slice that will not be mutated after this call returns
+// (the drain goroutine reads it asynchronously). The pump already allocates a
+// fresh chunk per read, so no copy is needed here.
 func (b *DiskBuffer) Write(p []byte) {
 	if atomic.LoadInt32(&b.stopped) != 0 {
 		return
 	}
-	chunk := make([]byte, len(p))
-	copy(chunk, p)
 	select {
-	case b.writeCh <- chunk:
+	case b.writeCh <- p:
 	default:
 		utils.WarnLog("Catchup: write channel full for stream %s, dropping %d bytes", b.streamID, len(p))
 	}
