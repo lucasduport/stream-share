@@ -20,12 +20,22 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/lucasduport/stream-share/pkg/types"
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
+
+// IsUniqueViolation reports whether err is a PostgreSQL unique-constraint
+// violation (SQLSTATE 23505). Used by callers that retry on token collisions
+// but must surface other DB failures.
+func IsUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && pqErr.Code == "23505"
+}
 
 // CreateTemporaryLink generates a new temporary download link
 func (m *DBManager) CreateTemporaryLink(token, username, url, streamID, title string, expirationTime time.Time) error {
