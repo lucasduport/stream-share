@@ -49,7 +49,7 @@ func (m *DBManager) LinkDiscordToLDAP(discordID, discordName, ldapUsername strin
 		utils.ErrorLog("Database error beginning link transaction: %v", err)
 		return err
 	}
-	defer tx.Rollback() // no-op after Commit
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
 
 	// Relinquish any prior mapping that holds this LDAP user on a different Discord account.
 	if _, err := tx.ExecContext(ctx, `
