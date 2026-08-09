@@ -125,6 +125,7 @@ const (
 type streamClient struct {
 	ch       chan []byte   // buffered video chunks awaiting the HTTP writer
 	done     chan struct{} // closed once when the client leaves or is dropped
+	name     string        // username, for logging on the drop path
 	doneOnce sync.Once
 }
 
@@ -155,7 +156,7 @@ type StreamBuffer struct {
 	// this buffer's upstream pump (e.g. for technical stream-info probing),
 	// without opening any additional connection to the provider.
 	probeTaps     []*probeTap
-	probeTapsLock sync.Mutex
+	probeTapsLock sync.RWMutex
 
 	// ready is closed once the pump knows whether the upstream came up, so the
 	// HTTP handler can decide what to send before it commits to a 200. startErr
@@ -550,7 +551,7 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 			delete(existingBuffer.clients, username)
 			utils.DebugLog("User %s reconnected to %s; replaced stale client", username, sm.streamLabel(streamID))
 		}
-		existingBuffer.clients[username] = newStreamClient()
+		existingBuffer.clients[username] = newStreamClient(username)
 		existingBuffer.clientsLock.Unlock()
 
 		return existingBuffer, nil
@@ -575,7 +576,7 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 		streamID:    streamID,
 		upstreamURL: upstreamURL.String(),
 		active:      true,
-		clients:     map[string]*streamClient{username: newStreamClient()},
+		clients:     map[string]*streamClient{username: newStreamClient(username)},
 		stopChan:    make(chan struct{}),
 		ready:       make(chan struct{}),
 		slateOK:     slateEligible(streamType),
@@ -600,10 +601,11 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 }
 
 // newStreamClient allocates a client with its jitter buffer and done signal.
-func newStreamClient() *streamClient {
+func newStreamClient(name string) *streamClient {
 	return &streamClient{
 		ch:   make(chan []byte, clientBufferChunks),
 		done: make(chan struct{}),
+		name: name,
 	}
 }
 
@@ -718,10 +720,10 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 			}
 
 			// Feed any attached probe taps (e.g. technical-info sampling). Almost
-			// always empty, so this is a cheap lock+iterate over nothing.
-			buffer.probeTapsLock.Lock()
+			// always empty, so this is a cheap RLock+iterate over nothing.
+			buffer.probeTapsLock.RLock()
 			taps := buffer.probeTaps
-			buffer.probeTapsLock.Unlock()
+			buffer.probeTapsLock.RUnlock()
 			for _, t := range taps {
 				t.feed(chunk)
 			}
@@ -752,10 +754,8 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 // slowest healthy client has taken the current one.
 func (sm *SessionManager) fanOut(buffer *StreamBuffer, chunk []byte) {
 	buffer.clientsLock.RLock()
-	names := make([]string, 0, len(buffer.clients))
 	targets := make([]*streamClient, 0, len(buffer.clients))
-	for name, cl := range buffer.clients {
-		names = append(names, name)
+	for _, cl := range buffer.clients {
 		targets = append(targets, cl)
 	}
 	buffer.clientsLock.RUnlock()
@@ -774,13 +774,13 @@ func (sm *SessionManager) fanOut(buffer *StreamBuffer, chunk []byte) {
 	var wg sync.WaitGroup
 	wg.Add(len(targets))
 	for i := range targets {
-		go func(name string, cl *streamClient) {
+		go func(cl *streamClient) {
 			defer wg.Done()
 			if sm.deliver(buffer, cl, chunk, false) {
-				utils.WarnLog("Dropping slow client %s from %s (buffer stalled)", name, sm.streamLabel(buffer.streamID))
-				sm.RemoveClient(buffer.streamID, name)
+				utils.WarnLog("Dropping slow client %s from %s (buffer stalled)", cl.name, sm.streamLabel(buffer.streamID))
+				sm.RemoveClient(buffer.streamID, cl.name)
 			}
-		}(names[i], targets[i])
+		}(targets[i])
 	}
 	wg.Wait()
 }
