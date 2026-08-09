@@ -233,7 +233,7 @@ func (b *Bot) startVODDownloadFromSelection(s *discordgo.Session, channelID, use
 	}
 	ldapUser, ok := data["ldap_user"].(string)
 	if !ok || ldapUser == "" {
-		b.warn(channelID, "🔗 Linking Required", "Your Discord account is not linked to an IPTV user.\n\nPlease link it first:\n`!link <ldap_username>`")
+		b.warn(channelID, "🔗 Linking Required", "Your Discord account is not linked to an IPTV user.\n\nPlease link it first:\n`/link <ldap_username>`")
 		return
 	}
 

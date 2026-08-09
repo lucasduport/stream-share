@@ -44,7 +44,7 @@ func (b *Bot) isAdmin(member *discordgo.Member) bool {
 // handleDisconnect forcibly disconnects a user (admin only).
 func (b *Bot) handleDisconnect(s *discordgo.Session, m *discordgo.MessageCreate, args []string) {
 	if len(args) != 1 {
-		b.info(m.ChannelID, "🔌 Disconnect User", "Usage: `!disconnect <username>`")
+		b.info(m.ChannelID, "🔌 Disconnect User", "Usage: `/disconnect <username>`")
 		return
 	}
 	username := args[0]
@@ -59,7 +59,7 @@ func (b *Bot) handleDisconnect(s *discordgo.Session, m *discordgo.MessageCreate,
 // handleTimeout temporarily blocks a user (admin only).
 func (b *Bot) handleTimeout(s *discordgo.Session, m *discordgo.MessageCreate, args []string) {
 	if len(args) != 2 {
-		b.info(m.ChannelID, "⏳ Timeout User", "Usage: `!timeout <username> <minutes>`")
+		b.info(m.ChannelID, "⏳ Timeout User", "Usage: `/timeout <username> <minutes>`")
 		return
 	}
 	username := args[0]

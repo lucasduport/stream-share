@@ -68,9 +68,9 @@ func (b *Bot) renderVODInteractiveMessage(s *discordgo.Session, ctx *vodSelectCo
 		}
 		options = append(options, discordgo.SelectMenuOption{Label: label, Value: value, Description: desc})
 	}
-	placeholder := "Pick a title…"
+	placeholder := "Pick to watch…"
 	if pages > 1 {
-		placeholder = fmt.Sprintf("Pick a title… (%d/%d)", ctx.Page+1, pages)
+		placeholder = fmt.Sprintf("Pick to watch… (%d/%d)", ctx.Page+1, pages)
 	}
 	components := []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{CustomID: "vod_select", Placeholder: placeholder, MinValues: &one, MaxValues: 1, Options: options}}},
@@ -82,13 +82,13 @@ func (b *Bot) renderVODInteractiveMessage(s *discordgo.Session, ctx *vodSelectCo
 		}})
 	}
 
-	desc := fmt.Sprintf("Query: `%s` — %d result(s)%s\nUse the dropdown to choose.", ctx.Query, total, func() string {
+	desc := fmt.Sprintf("Query: `%s` — %d result(s)%s\nPick one to get a download link and auto-cache.", ctx.Query, total, func() string {
 		if pages > 1 {
 			return fmt.Sprintf(" — Page %d/%d", ctx.Page+1, pages)
 		}
 		return ""
 	}())
-	embed := &discordgo.MessageEmbed{Title: "🎬 VOD Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	embed := &discordgo.MessageEmbed{Title: "🎬 Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
 	msg, err := s.ChannelMessageSendComplex(ctx.Channel, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{embed}, Components: components})
 	if err != nil {
 		return nil, err
@@ -141,9 +141,9 @@ func (b *Bot) updateVODInteractiveMessage(s *discordgo.Session, messageID string
 		}
 		options = append(options, discordgo.SelectMenuOption{Label: label, Value: value, Description: desc})
 	}
-	placeholder := "Pick a title…"
+	placeholder := "Pick to watch…"
 	if pages > 1 {
-		placeholder = fmt.Sprintf("Pick a title… (%d/%d)", ctx.Page+1, pages)
+		placeholder = fmt.Sprintf("Pick to watch… (%d/%d)", ctx.Page+1, pages)
 	}
 	components := []discordgo.MessageComponent{
 		discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{CustomID: "vod_select", Placeholder: placeholder, MinValues: &one, MaxValues: 1, Options: options}}},
@@ -155,13 +155,13 @@ func (b *Bot) updateVODInteractiveMessage(s *discordgo.Session, messageID string
 		}})
 	}
 
-	desc := fmt.Sprintf("Query: `%s` — %d result(s)%s\nUse the dropdown to choose.", ctx.Query, total, func() string {
+	desc := fmt.Sprintf("Query: `%s` — %d result(s)%s\nPick one to get a download link and auto-cache.", ctx.Query, total, func() string {
 		if pages > 1 {
 			return fmt.Sprintf(" — Page %d/%d", ctx.Page+1, pages)
 		}
 		return ""
 	}())
-	embed := &discordgo.MessageEmbed{Title: "🎬 VOD Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	embed := &discordgo.MessageEmbed{Title: "🎬 Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
 	embeds := []*discordgo.MessageEmbed{embed}
 	_, err := s.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: messageID, Channel: ctx.Channel, Embeds: &embeds, Components: &components})
 	return err

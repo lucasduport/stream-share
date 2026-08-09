@@ -21,7 +21,6 @@ package discord
 import (
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/lucasduport/stream-share/pkg/utils"
@@ -74,27 +73,17 @@ func (b *Bot) handleInteractionCreate(s *discordgo.Session, i *discordgo.Interac
 		}
 
 		selected := ctx2.Results[idx]
-		if strings.HasPrefix(ctx2.Query, "cache:") {
-			days := 1
-			if p := strings.LastIndex(ctx2.Query, "for "); p != -1 {
-				var n int
-				_, _ = fmt.Sscanf(ctx2.Query[p:], "for %dd", &n)
-				if n > 0 {
-					days = n
-				}
-			}
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: fmt.Sprintf("Caching: %s (days=%d)", selected.Title, days)},
-			})
-			go b.startVODCacheFromSelection(s, ctx2.Channel, ctx2.UserID, selected, days)
-		} else {
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: fmt.Sprintf("Starting download for: %s", selected.Title)},
-			})
-			go b.startVODDownloadFromSelection(s, ctx2.Channel, ctx2.UserID, selected)
+		// Always start background caching + create a download link.
+		days := ctx2.Days
+		if days <= 0 {
+			days = 7
 		}
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: fmt.Sprintf("Starting download and caching (%d day%s): %s", days, pluralS(days), selected.Title)},
+		})
+		go b.startVODCacheFromSelection(s, ctx2.Channel, ctx2.UserID, selected, days)
+		go b.startVODDownloadFromSelection(s, ctx2.Channel, ctx2.UserID, selected)
 	}
 }
 

@@ -58,6 +58,9 @@ type vodSelectContext struct {
 	Page    int
 	PerPage int
 	Created time.Time
+	// Days to keep the selected item cached (1–14). Used when the user picks
+	// from the dropdown to start both a download link and background caching.
+	Days int
 	// Tracks which pages have been enriched (full name, rating, size) to avoid redundant refreshes
 	EnrichedPages map[int]bool
 }

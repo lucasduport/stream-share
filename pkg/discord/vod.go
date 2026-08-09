@@ -27,13 +27,17 @@ import (
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
 
-// handleVOD implements the /vod command
+// handleVOD implements the /watch command
 // It searches across movies and series and lists everything in a single select with pagination.
-func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args []string) {
+// days controls how long the selected item is cached (1–14).
+func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args []string, days int) {
 	query := strings.TrimSpace(strings.Join(args, " "))
 	if query == "" {
-		b.info(m.ChannelID, "🎬 VOD Search", "Usage: `!vod <query>`\n\nSearches movies and shows. Use the dropdown to choose.")
+		b.info(m.ChannelID, "🎬 Watch & Cache", "Usage: `/watch <query> [days]`\n\nSearches movies and shows. Use the dropdown to pick — you'll get a download link and the item is cached automatically.")
 		return
+	}
+	if days <= 0 {
+		days = 7
 	}
 
 	utils.DebugLog("Discord: VOD query received: %q", query)
@@ -48,13 +52,13 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 	// Resolve LDAP
 	ok, resp, err := b.makeAPIRequest("GET", "/discord/"+m.Author.ID+"/ldap", nil)
 	if err != nil || !ok {
-		_ = editEmbed(s, loading, colorWarn, "🔗 Linking Required", "Your Discord account isn't linked. Use `!link <ldap_username>`. ")
+		_ = editEmbed(s, loading, colorWarn, "🔗 Linking Required", "Your Discord account isn't linked. Use `/link <ldap_username>`. ")
 		return
 	}
 	dmap, _ := resp.(map[string]interface{})
 	ldapUser := getString(dmap, "ldap_user")
 	if ldapUser == "" {
-		_ = editEmbed(s, loading, colorWarn, "🔗 Linking Required", "Link your account with `!link <ldap_username>`. ")
+		_ = editEmbed(s, loading, colorWarn, "🔗 Linking Required", "Link your account with `/link <ldap_username>`. ")
 		return
 	}
 
@@ -100,7 +104,7 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 	total := len(results)
 	perPage := 25
 	withButtons := total > perPage
-	ctx := &vodSelectContext{UserID: m.Author.ID, Channel: m.ChannelID, Query: query, Results: results, Page: 0, PerPage: perPage, Created: time.Now(), EnrichedPages: map[int]bool{}}
+	ctx := &vodSelectContext{UserID: m.Author.ID, Channel: m.ChannelID, Query: query, Results: results, Page: 0, PerPage: perPage, Created: time.Now(), Days: days, EnrichedPages: map[int]bool{}}
 
 	// Enrich only the first page sizes/metadata from server to keep fast responses
 	b.enrichFirstPage(query, results, perPage)
@@ -120,21 +124,21 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 	components := make([]discordgo.MessageComponent, 0, 2)
 	// Single select of up to 25 options
 	opts := buildOptionsForRange(results, start, end)
-	placeholder := "Pick a title…"
+	placeholder := "Pick to watch…"
 	if pages > 1 {
-		placeholder = fmt.Sprintf("Pick a title… (%d/%d)", 1, pages)
+		placeholder = fmt.Sprintf("Pick to watch… (%d/%d)", 1, pages)
 	}
 	components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.SelectMenu{CustomID: "vod_select", Placeholder: placeholder, MinValues: &one, MaxValues: 1, Options: opts}}})
 	if withButtons {
 		components = append(components, discordgo.ActionsRow{Components: []discordgo.MessageComponent{discordgo.Button{Style: discordgo.SecondaryButton, Label: "Prev", CustomID: "vod_prev", Disabled: true}, discordgo.Button{Style: discordgo.SecondaryButton, Label: "Next", CustomID: "vod_next", Disabled: total <= perPage}}})
 	}
-	desc := fmt.Sprintf("Query: `%s` — %d result(s)%s\nUse the dropdown to choose.", query, total, func() string {
+	desc := fmt.Sprintf("Query: `%s` — %d result(s)%s\nPick one to get a download link; it'll be cached for %d day(s).", query, total, func() string {
 		if pages > 1 {
 			return fmt.Sprintf(" — Page 1/%d", pages)
 		}
 		return ""
-	}())
-	embed := &discordgo.MessageEmbed{Title: "🎬 VOD Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	}(), days)
+	embed := &discordgo.MessageEmbed{Title: "🎬 Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
 	embeds := []*discordgo.MessageEmbed{embed}
 	if _, err := s.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: loading.ID, Channel: m.ChannelID, Embeds: &embeds, Components: &components}); err != nil {
 		// Fallback to send new without scaring the user; still paginate 25 by 25
@@ -168,7 +172,7 @@ func (b *Bot) handleCachedList(s *discordgo.Session, m *discordgo.MessageCreate)
 	}
 	arr, _ := resp.([]interface{})
 	if len(arr) == 0 {
-		b.info(m.ChannelID, "💾 Cached Items", "No active cached items.")
+		b.info(m.ChannelID, "💾 Library", "No cached items. Use `/watch <query>` to search and cache something.")
 		return
 	}
 	const per = 10
@@ -233,6 +237,6 @@ func (b *Bot) handleCachedList(s *discordgo.Session, m *discordgo.MessageCreate)
 		if pages > 1 {
 			desc += fmt.Sprintf("\n\nPage %d/%d", p+1, pages)
 		}
-		b.info(m.ChannelID, "💾 Cached Items", desc)
+		b.info(m.ChannelID, "💾 Library", desc)
 	}
 }

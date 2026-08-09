@@ -44,6 +44,15 @@ func trimTo(s string, max int) string {
 	return string(r[:max-3]) + "..."
 }
 
+// pluralS returns "s" when n is not 1, "" otherwise. Used for human-readable
+// plurals in ephemeral responses.
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // getString safely extracts string from a map[string]interface{}
 func getString(m map[string]interface{}, key string) string {
 	if val, ok := m[key].(string); ok {
