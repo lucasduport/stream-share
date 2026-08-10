@@ -584,9 +584,15 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 		return
 	}
 
+	// Normalize the stream ID and classify its type once for both the view
+	// registration and the cache lookup below.
+	idRaw := strings.TrimSuffix(tempLink.StreamID, path.Ext(tempLink.StreamID))
+	basePath := classifyStreamType(tempLink.URL, "movie")
+
+	defer c.registerVODView(tempLink.Username, idRaw, basePath, tempLink.Title)()
+
 	// If cached locally, serve from disk (normalize ID without extension)
 	if c.db != nil && tempLink.StreamID != "" {
-		idRaw := strings.TrimSuffix(tempLink.StreamID, path.Ext(tempLink.StreamID))
 		if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil && entry.Status == "ready" {
 			utils.InfoLog("Download via cache for %s -> %s", c.vodLabel(tempLink.StreamID), entry.FilePath)
 			ext := strings.ToLower(path.Ext(entry.FilePath))
@@ -594,18 +600,7 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 				ext = ".mp4"
 			}
 			c.touchVODCache(idRaw)
-			var ct string
-			switch ext {
-			case ".ts":
-				ct = "video/mp2t"
-			case ".mkv":
-				ct = "video/x-matroska"
-			case ".mp4":
-				ct = "video/mp4"
-			default:
-				ct = "application/octet-stream"
-			}
-			serveLocalFileRange(ctx, entry.FilePath, ct, sanitiseFilename(tempLink.Title)+ext, true)
+			serveLocalFileRange(ctx, entry.FilePath, contentTypeForPath(entry.FilePath), sanitiseFilename(tempLink.Title)+ext, true)
 			return
 		}
 
@@ -613,7 +608,6 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 		// future requests (including downloads) serve from local disk instead of
 		// hitting upstream again. This realizes the "always cache" policy.
 		if c.VODCacheEnabled {
-			basePath := classifyStreamType(tempLink.URL, "movie")
 			defaultExt := ".mp4"
 			if basePath == "series" {
 				defaultExt = ".mkv"
@@ -710,22 +704,17 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	utils.DebugLog("Multiplexed stream request: user=%s, id=%s, type=%s, title=%s, upstream=%s",
 		username, streamID, streamType, streamTitle, targetURL.String())
 
-	// If VOD and cached locally, serve from disk to avoid upstream connection
+	// If VOD and cached locally, serve from disk to avoid upstream connection.
+	// Register a synthetic VOD view so /status and watch history reflect this
+	// playback — without it, cached VOD served through the multiplexed path
+	// (e.g. the generic /:user/:pass/:id route) would be invisible.
 	if c.db != nil && (streamType == "movie" || streamType == "series") {
 		if entry, err := c.db.GetVODCache(streamIDRaw); err == nil && entry != nil && entry.Status == "ready" {
 			if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
 				utils.InfoLog("Multiplex: serving cached %s for %s from %s", streamType, c.streamLabel(streamIDRaw), entry.FilePath)
-				// Content-Type based on file extension
-				var ct string
-				if ext := strings.ToLower(path.Ext(entry.FilePath)); ext == ".ts" {
-					ct = "video/mp2t"
-				} else if ext == ".mkv" {
-					ct = "video/x-matroska"
-				} else {
-					ct = "video/mp4"
-				}
+				defer c.registerVODView(username, streamIDRaw, streamType, streamTitle)()
 				c.touchVODCache(streamIDRaw)
-				serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
+				serveLocalFileRange(ctx, entry.FilePath, contentTypeForPath(entry.FilePath), "", false)
 				return
 			}
 			utils.WarnLog("Multiplex: cached %s missing on disk for %s at %s; falling back to upstream", streamType, c.streamLabel(streamIDRaw), entry.FilePath)

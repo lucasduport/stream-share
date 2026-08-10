@@ -133,6 +133,28 @@ func mergeHttpHeader(dst, src http.Header) {
 	}
 }
 
+// registerVODView creates a synthetic VOD session for /status and watch-history
+// tracking. It resolves the best display title (canonical name lookup, then
+// fallbackTitle, then streamID), calls RegisterVODView, and returns a cleanup
+// func that schedules the grace-period teardown via UnregisterVODView. The
+// caller should defer the returned func. No-op when username or streamID is
+// empty.
+func (c *Config) registerVODView(username, streamID, streamType, fallbackTitle string) func() {
+	if c.sessionManager == nil || username == "" || streamID == "" {
+		return func() {}
+	}
+	label := fallbackTitle
+	if name, ok := c.resolveTitleAtStart(streamID, streamType); ok && strings.TrimSpace(name) != "" {
+		label = name
+	}
+	if strings.TrimSpace(label) == "" {
+		label = streamID
+	}
+	utils.InfoLog("VOD %s started: %s for user %s", streamType, label, username)
+	c.sessionManager.RegisterVODView(username, streamID, streamType, label)
+	return func() { c.sessionManager.UnregisterVODView(username, streamID) }
+}
+
 // serveLocalFileRange serves a local file with HTTP Range support for seamless seeking.
 // Uses http.ServeContent, which handles Range parsing, conditional requests
 // (If-Modified-Since / If-None-Match → 304), ETag generation, and HEAD for free.
