@@ -52,7 +52,7 @@ func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID
 		"episode":      selected.Episode,
 		"days":         days,
 	}
-	ok, resp, err = b.makeAPIRequest("POST", "/cache/start", payload)
+	ok, resp, err = b.makeSlowAPIRequest("POST", "/cache/start", payload)
 	if err != nil || !ok {
 		utils.WarnLog("Discord: cache start failed for %s: %v", selected.StreamID, err)
 		return
