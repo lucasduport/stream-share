@@ -85,3 +85,68 @@ func editEmbed(s *discordgo.Session, msg *discordgo.Message, color int, title, d
 	_, err := s.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: msg.ID, Channel: msg.ChannelID, Embeds: &embeds})
 	return err
 }
+
+// editEmbedWithComponents is like editEmbed but also replaces the message
+// components (e.g. to attach or disable a Retry button).
+func editEmbedWithComponents(s *discordgo.Session, channelID, msgID string, color int, title, desc string, components []discordgo.MessageComponent) error {
+	embed := &discordgo.MessageEmbed{Title: title, Description: desc, Color: color, Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	embeds := []*discordgo.MessageEmbed{embed}
+	edit := &discordgo.MessageEdit{ID: msgID, Channel: channelID, Embeds: &embeds}
+	if components != nil {
+		edit.Components = &components
+	}
+	_, err := s.ChannelMessageEditComplex(edit)
+	return err
+}
+
+// retryButtonRow builds the single-button action row used on failure embeds.
+// disabled is set while a retry is in flight or when the context is missing.
+func retryButtonRow(disabled bool) []discordgo.MessageComponent {
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{Style: discordgo.PrimaryButton, Label: "🔁 Retry", CustomID: "retry", Disabled: disabled},
+		}},
+	}
+}
+
+// failWithRetry sends a failure embed with a Retry button and registers a retry
+// context so the button can re-fire the original request. It returns the sent
+// message so callers can re-key the context if the send path differs.
+func (b *Bot) failWithRetry(channelID string, ctx *retryContext, title, desc string) {
+	embed := &discordgo.MessageEmbed{
+		Title:       title,
+		Description: desc,
+		Color:       colorError,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+	}
+	msg, err := b.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Embeds:     []*discordgo.MessageEmbed{embed},
+		Components: retryButtonRow(false),
+	})
+	if err != nil {
+		utils.ErrorLog("Discord: failed to send retryable error embed: %v", err)
+		b.fail(channelID, title, desc)
+		return
+	}
+	ctx.Created = time.Now()
+	b.retryLock.Lock()
+	b.pendingRetry[msg.ID] = ctx
+	b.retryLock.Unlock()
+}
+
+// editFailWithRetry transforms an existing message (e.g. a loading embed) into a
+// failure embed with a Retry button, keyed by that message's ID.
+func (b *Bot) editFailWithRetry(s *discordgo.Session, msg *discordgo.Message, ctx *retryContext, title, desc string) {
+	if msg == nil {
+		b.failWithRetry(ctx.ChannelID, ctx, title, desc)
+		return
+	}
+	ctx.Created = time.Now()
+	if err := editEmbedWithComponents(s, msg.ChannelID, msg.ID, colorError, title, desc, retryButtonRow(false)); err != nil {
+		utils.ErrorLog("Discord: failed to edit failure embed with retry: %v", err)
+		return
+	}
+	b.retryLock.Lock()
+	b.pendingRetry[msg.ID] = ctx
+	b.retryLock.Unlock()
+}

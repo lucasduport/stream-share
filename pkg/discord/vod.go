@@ -49,30 +49,38 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 		Timestamp:   time.Now().UTC().Format(time.RFC3339),
 	})
 
+	b.runVODSearch(s, m.ChannelID, m.Author.ID, query, days, loading)
+}
+
+// runVODSearch performs the LDAP resolution, the /vod/search call and renders
+// the interactive result message. The outcome is edited into msg (the loading
+// embed on the initial call, or the failure embed on a retry).
+func (b *Bot) runVODSearch(s *discordgo.Session, channelID, userID, query string, days int, msg *discordgo.Message) {
 	// Resolve LDAP
-	ok, resp, err := b.makeAPIRequest("GET", "/discord/"+m.Author.ID+"/ldap", nil)
+	ok, resp, err := b.makeAPIRequest("GET", "/discord/"+userID+"/ldap", nil)
 	if err != nil || !ok {
-		_ = editEmbed(s, loading, colorWarn, "🔗 Linking Required", "Your Discord account isn't linked. Use `/link <ldap_username>`. ")
+		_ = editEmbed(s, msg, colorWarn, "🔗 Linking Required", "Your Discord account isn't linked. Use `/link <ldap_username>`. ")
 		return
 	}
 	dmap, _ := resp.(map[string]interface{})
 	ldapUser := getString(dmap, "ldap_user")
 	if ldapUser == "" {
-		_ = editEmbed(s, loading, colorWarn, "🔗 Linking Required", "Link your account with `/link <ldap_username>`. ")
+		_ = editEmbed(s, msg, colorWarn, "🔗 Linking Required", "Link your account with `/link <ldap_username>`. ")
 		return
 	}
 
 	// Search
 	ok, resp, err = b.makeSlowAPIRequest("POST", "/vod/search", map[string]string{"username": ldapUser, "query": query})
 	if err != nil || !ok {
-		_ = editEmbed(s, loading, colorError, "❌ Search Failed", "Couldn't complete search.")
+		b.editFailWithRetry(s, msg, &retryContext{Kind: retrySearch, UserID: userID, ChannelID: channelID, Query: query, Days: days}, "❌ Search Failed", "Couldn't complete search.")
 		return
 	}
 	mp, _ := resp.(map[string]interface{})
 	arr, _ := mp["results"].([]interface{})
 	utils.DebugLog("Discord: API returned %d VOD results for %q", len(arr), query)
 	if len(arr) == 0 {
-		_ = editEmbed(s, loading, colorInfo, "🔎 No Results", fmt.Sprintf("No results for `%s`.", query))
+		_ = editEmbed(s, msg, colorInfo, "🔎 No Results", fmt.Sprintf("No results for `%s`.", query))
+		b.clearRetry(msg)
 		return
 	}
 	results := toVODResults(arr)
@@ -95,7 +103,8 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 		utils.DebugLog("Discord: result[%d]: type=%s id=%s title=%s series=%s S%02dE%02d", i, r.StreamType, r.StreamID, r.Title, r.SeriesTitle, r.Season, r.Episode)
 	}
 	if len(results) == 0 {
-		_ = editEmbed(s, loading, colorInfo, "🔎 No Results", fmt.Sprintf("No results matched `%s`. Try removing season/episode or using a shorter query.", query))
+		_ = editEmbed(s, msg, colorInfo, "🔎 No Results", fmt.Sprintf("No results matched `%s`. Try removing season/episode or using a shorter query.", query))
+		b.clearRetry(msg)
 		return
 	}
 
@@ -104,7 +113,7 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 	total := len(results)
 	perPage := 25
 	withButtons := total > perPage
-	ctx := &vodSelectContext{UserID: m.Author.ID, Channel: m.ChannelID, Query: query, Results: results, Page: 0, PerPage: perPage, Created: time.Now(), Days: days, EnrichedPages: map[int]bool{}}
+	ctx := &vodSelectContext{UserID: userID, Channel: channelID, Query: query, Results: results, Page: 0, PerPage: perPage, Created: time.Now(), Days: days, EnrichedPages: map[int]bool{}}
 
 	// Enrich only the first page sizes/metadata from server to keep fast responses
 	b.enrichFirstPage(query, results, perPage)
@@ -140,13 +149,14 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 	}(), days)
 	embed := &discordgo.MessageEmbed{Title: "🎬 Search Results", Description: desc, Color: colorInfo, Timestamp: time.Now().UTC().Format(time.RFC3339)}
 	embeds := []*discordgo.MessageEmbed{embed}
-	if _, err := s.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: loading.ID, Channel: m.ChannelID, Embeds: &embeds, Components: &components}); err != nil {
+	if _, err := s.ChannelMessageEditComplex(&discordgo.MessageEdit{ID: msg.ID, Channel: channelID, Embeds: &embeds, Components: &components}); err != nil {
 		// Fallback to send new without scaring the user; still paginate 25 by 25
-		msg, err2 := b.renderVODInteractiveMessage(s, ctx)
+		newMsg, err2 := b.renderVODInteractiveMessage(s, ctx)
 		if err2 == nil {
 			b.selectLock.Lock()
-			b.pendingVODSelect[msg.ID] = ctx
+			b.pendingVODSelect[newMsg.ID] = ctx
 			b.selectLock.Unlock()
+			b.clearRetry(msg)
 		} else {
 			// As a last resort, just log; don't show a misleading "too many results" message
 			utils.WarnLog("Discord: failed to render VOD selection: edit=%v send=%v", err, err2)
@@ -154,8 +164,9 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 		}
 	} else {
 		b.selectLock.Lock()
-		b.pendingVODSelect[loading.ID] = ctx
+		b.pendingVODSelect[msg.ID] = ctx
 		b.selectLock.Unlock()
+		b.clearRetry(msg)
 	}
 	// Mark first page as enriched
 	if ctx.EnrichedPages != nil {

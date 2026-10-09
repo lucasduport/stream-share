@@ -41,6 +41,9 @@ func (b *Bot) handleInteractionCreate(s *discordgo.Session, i *discordgo.Interac
 	case "vod_next":
 		b.handleVODPageChange(s, i, msgID, +1, "next")
 
+	case "retry":
+		b.handleRetry(s, i, msgID)
+
 	default:
 		if customID != "vod_select" {
 			return
