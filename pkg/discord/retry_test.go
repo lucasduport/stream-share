@@ -60,6 +60,54 @@ func TestClearRetry(t *testing.T) {
 	}
 }
 
+func TestAPIErrorMessage(t *testing.T) {
+	// err takes priority
+	got := apiErrorMessage("Failed to create download", errTest{}, map[string]interface{}{"Error": "api says no"})
+	if got != "Failed to create download: boom" {
+		t.Fatalf("expected err to win, got %q", got)
+	}
+	// falls back to API Error field
+	got = apiErrorMessage("Failed to start caching", nil, map[string]interface{}{"Error": "timeout"})
+	if got != "Failed to start caching: timeout" {
+		t.Fatalf("expected API error, got %q", got)
+	}
+	// base only when neither present
+	got = apiErrorMessage("Failed", nil, nil)
+	if got != "Failed" {
+		t.Fatalf("expected base only, got %q", got)
+	}
+	got = apiErrorMessage("Failed", nil, map[string]interface{}{"Error": 42})
+	if got != "Failed" {
+		t.Fatalf("expected base only for non-string Error, got %q", got)
+	}
+}
+
+type errTest struct{}
+
+func (errTest) Error() string { return "boom" }
+
+func TestRetryGuardDenials(t *testing.T) {
+	b := newTestBot()
+
+	// InFlight guard
+	ctx := &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now(), InFlight: true}
+	if deny := b.retryGuard(ctx, nil); deny == "" {
+		t.Fatal("expected denial for InFlight context")
+	}
+
+	// Max attempts guard
+	ctx = &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now(), Attempts: retryMaxAttempts}
+	if deny := b.retryGuard(ctx, nil); deny == "" {
+		t.Fatal("expected denial for max attempts")
+	}
+
+	// Backoff guard
+	ctx = &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now(), LastAttempt: time.Now()}
+	if deny := b.retryGuard(ctx, nil); deny == "" {
+		t.Fatal("expected denial inside backoff window")
+	}
+}
+
 func TestRetryContextStoresSearchParams(t *testing.T) {
 	ctx := &retryContext{Kind: retrySearch, UserID: "u1", ChannelID: "c1", Query: "game of thrones", Days: 3}
 	if ctx.Kind != retrySearch || ctx.Query != "game of thrones" || ctx.Days != 3 {

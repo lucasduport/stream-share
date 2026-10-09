@@ -229,9 +229,6 @@ func (b *Bot) handleApplicationCommand(s *discordgo.Session, i *discordgo.Intera
 	case "watch":
 		query := optString(i, "query")
 		days := int(optInt(i, "days"))
-		if days <= 0 {
-			days = 7
-		}
 		ackEphemeral(s, i, "Searching…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleVOD(s, mc, strings.Fields(query), days)

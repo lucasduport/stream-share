@@ -45,43 +45,12 @@ func (b *Bot) handleRetry(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	ctx, ok := b.pendingRetry[msgID]
 	if !ok {
 		b.retryLock.Unlock()
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "This retry option has expired. Please run the command again."},
-		})
+		b.ackRetryEphemeral(s, i, "This retry option has expired. Please run the command again.")
 		return
 	}
-	if !b.isSameUser(ctx.UserID, i) {
+	if deny := b.retryGuard(ctx, i); deny != "" {
 		b.retryLock.Unlock()
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Only the user who triggered this request can retry it."},
-		})
-		return
-	}
-	// Guard against double-clicks and hammering a failing provider.
-	if ctx.InFlight {
-		b.retryLock.Unlock()
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "A retry is already in progress…"},
-		})
-		return
-	}
-	if ctx.Attempts >= retryMaxAttempts {
-		b.retryLock.Unlock()
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Too many retry attempts. Please run the command again."},
-		})
-		return
-	}
-	if !ctx.LastAttempt.IsZero() && time.Since(ctx.LastAttempt) < retryBackoff {
-		b.retryLock.Unlock()
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: "Please wait a moment before retrying again."},
-		})
+		b.ackRetryEphemeral(s, i, deny)
 		return
 	}
 	ctx.InFlight = true
@@ -119,6 +88,33 @@ func (b *Bot) handleRetry(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	}()
 }
 
+// ackRetryEphemeral sends a short ephemeral reply to a retry interaction.
+func (b *Bot) ackRetryEphemeral(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral, Content: content},
+	})
+}
+
+// retryGuard returns a non-empty denial message when the retry click must be
+// rejected (wrong user, already in flight, too many attempts, backoff window).
+// The caller must hold b.retryLock.
+func (b *Bot) retryGuard(ctx *retryContext, i *discordgo.InteractionCreate) string {
+	if !b.isSameUser(ctx.UserID, i) {
+		return "Only the user who triggered this request can retry it."
+	}
+	if ctx.InFlight {
+		return "A retry is already in progress…"
+	}
+	if ctx.Attempts >= retryMaxAttempts {
+		return "Too many retry attempts. Please run the command again."
+	}
+	if !ctx.LastAttempt.IsZero() && time.Since(ctx.LastAttempt) < retryBackoff {
+		return "Please wait a moment before retrying again."
+	}
+	return ""
+}
+
 // retryProgressDescription returns the "Retrying…" embed body for a given kind.
 func retryProgressDescription(kind retryKind) string {
 	switch kind {
@@ -141,11 +137,7 @@ func (b *Bot) executeRetry(s *discordgo.Session, msgID, channelID string, ctx *r
 
 	switch ctx.Kind {
 	case retrySearch:
-		days := ctx.Days
-		if days <= 0 {
-			days = 7
-		}
-		b.runVODSearch(s, channelID, ctx.UserID, ctx.Query, days, msg)
+		b.runVODSearch(s, channelID, ctx.UserID, ctx.Query, ctx.Days, msg)
 
 	case retryDownload:
 		b.startVODDownloadFromSelection(s, channelID, ctx.UserID, ctx.Selected)
@@ -166,10 +158,6 @@ func (b *Bot) executeRetry(s *discordgo.Session, msgID, channelID string, ctx *r
 func (b *Bot) retryCacheStart(s *discordgo.Session, msg *discordgo.Message, ctx *retryContext) {
 	channelID := ctx.ChannelID
 	selected := ctx.Selected
-	days := ctx.Days
-	if days <= 0 {
-		days = 7
-	}
 
 	// Idempotency check: if the stream is already tracked server-side, report
 	// the existing progress instead of duplicating the download.
@@ -192,7 +180,7 @@ func (b *Bot) retryCacheStart(s *discordgo.Session, msg *discordgo.Message, ctx 
 	}
 
 	// Not tracked yet: re-fire the cache start.
-	b.startVODCacheFromSelection(s, channelID, ctx.UserID, selected, days)
+	b.startVODCacheFromSelection(s, channelID, ctx.UserID, selected, ctx.Days)
 	b.finishRetryMessage(s, msg, colorInfo, "🔁 Cache Retry Sent", "The cache request was re-submitted. Check `/library` for progress.")
 }
 

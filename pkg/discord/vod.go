@@ -36,9 +36,6 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 		b.info(m.ChannelID, "🎬 Watch & Cache", "Usage: `/watch <query> [days]`\n\nSearches movies and shows. Use the dropdown to pick — you'll get a download link and the item is cached automatically.")
 		return
 	}
-	if days <= 0 {
-		days = 7
-	}
 
 	utils.DebugLog("Discord: VOD query received: %q", query)
 	// Loading embed
@@ -56,6 +53,9 @@ func (b *Bot) handleVOD(s *discordgo.Session, m *discordgo.MessageCreate, args [
 // the interactive result message. The outcome is edited into msg (the loading
 // embed on the initial call, or the failure embed on a retry).
 func (b *Bot) runVODSearch(s *discordgo.Session, channelID, userID, query string, days int, msg *discordgo.Message) {
+	if days <= 0 {
+		days = 7
+	}
 	// Resolve LDAP
 	ok, resp, err := b.makeAPIRequest("GET", "/discord/"+userID+"/ldap", nil)
 	if err != nil || !ok {

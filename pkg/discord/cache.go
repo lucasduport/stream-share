@@ -29,10 +29,14 @@ import (
 // re-fire the request; retrying is idempotent because the server short-circuits
 // streams that are already cached or downloading.
 func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID string, selected types.VODResult, days int) {
+	if days <= 0 {
+		days = 7
+	}
+	retryCtx := &retryContext{Kind: retryCache, UserID: userID, ChannelID: channelID, Selected: selected, Days: days}
 	// Resolve LDAP
 	ok, resp, err := b.makeAPIRequest("GET", "/discord/"+userID+"/ldap", nil)
 	if err != nil || !ok {
-		b.failWithRetry(channelID, &retryContext{Kind: retryCache, UserID: userID, ChannelID: channelID, Selected: selected, Days: days}, "❌ Cache Start Failed", "Failed to retrieve your user information. Please try again later.")
+		b.failWithRetry(channelID, retryCtx, "❌ Cache Start Failed", "Failed to retrieve your user information. Please try again later.")
 		return
 	}
 	data, _ := resp.(map[string]interface{})
@@ -54,17 +58,7 @@ func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID
 	}
 	ok, resp, err = b.makeAPIRequest("POST", "/cache/start", payload)
 	if err != nil || !ok {
-		errMsg := "Failed to start caching"
-		if err != nil {
-			errMsg += ": " + err.Error()
-		} else if resp != nil {
-			if errData, ok := resp.(map[string]interface{}); ok {
-				if errStr, ok := errData["Error"].(string); ok {
-					errMsg += ": " + errStr
-				}
-			}
-		}
-		b.failWithRetry(channelID, &retryContext{Kind: retryCache, UserID: userID, ChannelID: channelID, Selected: selected, Days: days}, "❌ Cache Start Failed", errMsg)
+		b.failWithRetry(channelID, retryCtx, "❌ Cache Start Failed", apiErrorMessage("Failed to start caching", err, resp))
 		return
 	}
 	d, _ := resp.(map[string]interface{})
