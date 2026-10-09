@@ -60,6 +60,25 @@ func getString(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// apiErrorMessage builds a human-readable error message from a failed internal
+// API call. base is the fallback text (e.g. "Failed to create download"); when
+// err is non-nil its message is appended, otherwise the API's "Error" field is
+// appended when present.
+func apiErrorMessage(base string, err error, respData interface{}) string {
+	msg := base
+	if err != nil {
+		return msg + ": " + err.Error()
+	}
+	if respData != nil {
+		if errData, ok := respData.(map[string]interface{}); ok {
+			if errStr, ok := errData["Error"].(string); ok {
+				return msg + ": " + errStr
+			}
+		}
+	}
+	return msg
+}
+
 // isSameUser verifies the interaction comes from the expected user.
 func (b *Bot) isSameUser(expected string, i *discordgo.InteractionCreate) bool {
 	if i.Member != nil && i.Member.User != nil {

@@ -25,20 +25,24 @@ import (
 )
 
 // startVODCacheFromSelection fires off a background cache request for the
-// selected item and returns immediately. It is fire-and-forget: the download
-// link embed (sent separately by startVODDownloadFromSelection) is the
-// user-facing response, and the user can check /library for cache status.
+// selected item. On failure it surfaces a retryable embed so the user can
+// re-fire the request; retrying is idempotent because the server short-circuits
+// streams that are already cached or downloading.
 func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID string, selected types.VODResult, days int) {
+	if days <= 0 {
+		days = 7
+	}
+	retryCtx := &retryContext{Kind: retryCache, UserID: userID, ChannelID: channelID, Selected: selected, Days: days}
 	// Resolve LDAP
 	ok, resp, err := b.makeAPIRequest("GET", "/discord/"+userID+"/ldap", nil)
 	if err != nil || !ok {
-		utils.WarnLog("Discord: cache start failed to resolve LDAP for %s: %v", userID, err)
+		b.failWithRetry(channelID, retryCtx, "❌ Cache Start Failed", "Failed to retrieve your user information. Please try again later.")
 		return
 	}
 	data, _ := resp.(map[string]interface{})
 	ldapUser := getString(data, "ldap_user")
 	if ldapUser == "" {
-		utils.WarnLog("Discord: cache start aborted — no LDAP user linked to %s", userID)
+		b.warn(channelID, "🔗 Linking Required", "Your Discord account is not linked to an IPTV user.\n\nPlease link it first:\n`/link <ldap_username>`")
 		return
 	}
 
@@ -54,7 +58,7 @@ func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID
 	}
 	ok, resp, err = b.makeAPIRequest("POST", "/cache/start", payload)
 	if err != nil || !ok {
-		utils.WarnLog("Discord: cache start failed for %s: %v", selected.StreamID, err)
+		b.failWithRetry(channelID, retryCtx, "❌ Cache Start Failed", apiErrorMessage("Failed to start caching", err, resp))
 		return
 	}
 	d, _ := resp.(map[string]interface{})
@@ -64,4 +68,36 @@ func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID
 	} else {
 		utils.DebugLog("Discord: cache started for %s (status=%s, days=%d)", selected.StreamID, status, days)
 	}
+}
+
+// checkCacheProgress queries /cache/by-stream/:streamid and reports the current
+// cache state for a stream. It returns (found, status, percent, title, error).
+// found is false when the stream is not present in the cache table at all.
+func (b *Bot) checkCacheProgress(streamID string) (found bool, status string, percent int, title string, err error) {
+	ok, resp, err := b.makeAPIRequest("GET", "/cache/by-stream/"+streamID, nil)
+	if err != nil || !ok {
+		return false, "", 0, "", err
+	}
+	d, _ := resp.(map[string]interface{})
+	if d == nil {
+		return false, "", 0, "", nil
+	}
+	status = getString(d, "status")
+	title = getString(d, "title")
+	if status == "" {
+		return false, "", 0, "", nil
+	}
+	// Prefer the dedicated progress endpoint shape when available; the
+	// by-stream payload carries downloaded/total bytes we can compute from.
+	downloaded := getInt64(d, "downloaded_bytes")
+	total := getInt64(d, "total_bytes")
+	if total > 0 {
+		percent = int((downloaded * 100) / total)
+		if percent > 100 {
+			percent = 100
+		}
+	} else if status == "ready" {
+		percent = 100
+	}
+	return true, status, percent, title, nil
 }

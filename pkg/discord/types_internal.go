@@ -44,6 +44,10 @@ type Bot struct {
 	pendingVODSelect map[string]*vodSelectContext // messageID -> selection context
 	selectLock       sync.RWMutex
 
+	// Retry contexts for failed operations (search / download / cache start)
+	pendingRetry map[string]*retryContext // messageID -> retry context
+	retryLock    sync.RWMutex
+
 	// Slash commands
 	devGuildID         string
 	registeredCommands []*discordgo.ApplicationCommand
@@ -63,4 +67,31 @@ type vodSelectContext struct {
 	Days int
 	// Tracks which pages have been enriched (full name, rating, size) to avoid redundant refreshes
 	EnrichedPages map[int]bool
+}
+
+// retryKind identifies which failed operation a retry button should re-fire.
+type retryKind string
+
+const (
+	retrySearch   retryKind = "search"
+	retryDownload retryKind = "download"
+	retryCache    retryKind = "cache"
+)
+
+// retryContext stores everything needed to re-fire a failed internal API request
+// from a Retry button, keyed by the message ID of the failure embed.
+type retryContext struct {
+	Kind      retryKind
+	UserID    string
+	ChannelID string
+	// Search parameters
+	Query string
+	Days  int
+	// Download / cache parameters
+	Selected types.VODResult
+	// Bookkeeping
+	Created     time.Time
+	Attempts    int       // number of retry clicks so far
+	LastAttempt time.Time // for simple backoff
+	InFlight    bool      // true while a retry request is running
 }

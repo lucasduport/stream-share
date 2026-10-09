@@ -118,6 +118,7 @@ func NewBot(token, adminRoleID, apiURL, apiKey string) (*Bot, error) {
 		client:           &http.Client{Timeout: 10 * time.Second},
 		slowClient:       &http.Client{Timeout: 90 * time.Second},
 		pendingVODSelect: make(map[string]*vodSelectContext),
+		pendingRetry:     make(map[string]*retryContext),
 		stopChan:         make(chan struct{}),
 	}
 
@@ -200,6 +201,7 @@ func (b *Bot) cleanupRoutine() {
 			return
 		case <-ticker.C:
 			b.cleanupExpiredVODSelects()
+			b.cleanupExpiredRetries()
 		}
 	}
 }
@@ -219,16 +221,17 @@ func (b *Bot) cleanupExpiredVODSelects() {
 
 // Starts VOD download for the given selection and informs the user
 func (b *Bot) startVODDownloadFromSelection(s *discordgo.Session, channelID, userID string, selectedVOD types.VODResult) {
+	retryCtx := &retryContext{Kind: retryDownload, UserID: userID, ChannelID: channelID, Selected: selectedVOD}
 	// Get LDAP username for this Discord user
 	success, respData, err := b.makeAPIRequest("GET", "/discord/"+userID+"/ldap", nil)
 	if err != nil || !success {
-		b.fail(channelID, "❌ Download Failed", "Failed to retrieve your user information. Please try again later.")
+		b.failWithRetry(channelID, retryCtx, "❌ Download Failed", "Failed to retrieve your user information. Please try again later.")
 		return
 	}
 
 	data, ok := respData.(map[string]interface{})
 	if !ok {
-		b.fail(channelID, "❌ Download Failed", "Failed to process server response.")
+		b.failWithRetry(channelID, retryCtx, "❌ Download Failed", "Failed to process server response.")
 		return
 	}
 	ldapUser, ok := data["ldap_user"].(string)
@@ -246,29 +249,19 @@ func (b *Bot) startVODDownloadFromSelection(s *discordgo.Session, channelID, use
 	}
 	success, respData, err = b.makeAPIRequest("POST", "/vod/download", downloadData)
 	if err != nil || !success {
-		errMsg := "Failed to create download"
-		if err != nil {
-			errMsg += ": " + err.Error()
-		} else if respData != nil {
-			if errData, ok := respData.(map[string]interface{}); ok {
-				if errStr, ok := errData["Error"].(string); ok {
-					errMsg += ": " + errStr
-				}
-			}
-		}
-		b.fail(channelID, "❌ Download Failed", errMsg)
+		b.failWithRetry(channelID, retryCtx, "❌ Download Failed", apiErrorMessage("Failed to create download", err, respData))
 		return
 	}
 
 	// Process download response
 	data, ok = respData.(map[string]interface{})
 	if !ok {
-		b.fail(channelID, "❌ Download Failed", "Failed to process download response.")
+		b.failWithRetry(channelID, retryCtx, "❌ Download Failed", "Failed to process download response.")
 		return
 	}
 	downloadURL, ok := data["download_url"].(string)
 	if !ok || downloadURL == "" {
-		b.fail(channelID, "❌ Download Failed", "Failed to get download URL.")
+		b.failWithRetry(channelID, retryCtx, "❌ Download Failed", "Failed to get download URL.")
 		return
 	}
 
