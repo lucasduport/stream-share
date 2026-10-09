@@ -116,6 +116,8 @@ It supports:
 			XtreamPassword:       config.CredentialString(xtreamPassword),
 			XtreamBaseURL:        xtreamBaseURL,
 			M3UCacheExpiration:   viper.GetInt("m3u-cache-expiration-hours"),
+			M3UDedupEnabled:       viper.GetBool("m3u-dedup-enabled"),
+			M3UDedupPreferredLangs: viper.GetString("m3u-dedup-preferred-langs"),
 			User:                 config.CredentialString(viper.GetString("auth-user")),
 			Password:             config.CredentialString(viper.GetString("auth-password")),
 			AdvertisedPort:       advertisedPort,
@@ -223,6 +225,8 @@ func init() {
 	rootCmd.Flags().String("hostname", "", "Hostname to use in generated URLs")
 	rootCmd.Flags().BoolP("https-enabled", "", false, "Use HTTPS for generated URLs")
 	rootCmd.Flags().Int("m3u-cache-expiration-hours", 1, "M3U cache expiration in hours")
+	rootCmd.Flags().Bool("m3u-dedup-enabled", true, "Remove redundant tracks (duplicate stream IDs, same-title language/quality copies) from the generated M3U")
+	rootCmd.Flags().String("m3u-dedup-preferred-langs", "fra", "Comma-separated ordered list of preferred audio languages for M3U dedup (e.g. \"fra,eng\")")
 
 	// Authentication configuration
 	rootCmd.Flags().String("auth-user", "usertest", "Username for basic authentication when LDAP is not enabled")

@@ -839,13 +839,25 @@ func (c *Config) playlistInitialization() error {
 
 // MarshallInto a *bufio.Writer a Playlist.
 // marshallInto writes the in-memory playlist into an M3U file, rewriting
-// credentials and paths depending on xtream mode.
+// credentials and paths depending on xtream mode. When M3U dedup is enabled,
+// redundant tracks are dropped first (same stream ID listed twice, or
+// same-title copies differing only by language/quality), keeping the best
+// source per group.
 func (c *Config) marshallInto(into *os.File, xtream bool) error {
-	filteredTrack := make([]m3u.Track, 0, len(c.playlist.Tracks))
+	tracks := c.playlist.Tracks
+	if c.M3UDedupEnabled && len(tracks) > 1 {
+		before := len(tracks)
+		tracks, _ = deduplicateTracks(tracks, dedupPreferredLanguages(c.M3UDedupPreferredLangs))
+		if len(tracks) != before {
+			utils.InfoLog("M3U dedup: %d tracks -> %d kept (%d redundant removed)", before, len(tracks), before-len(tracks))
+		}
+	}
+
+	filteredTrack := make([]m3u.Track, 0, len(tracks))
 
 	ret := 0
 	into.WriteString("#EXTM3U\n") // nolint: errcheck
-	for i, track := range c.playlist.Tracks {
+	for i, track := range tracks {
 		var buffer bytes.Buffer
 
 		buffer.WriteString("#EXTINF:") // nolint: errcheck
@@ -869,6 +881,8 @@ func (c *Config) marshallInto(into *os.File, xtream bool) error {
 
 		filteredTrack = append(filteredTrack, track)
 	}
+	// Store back the written list so route registration (which runs after
+	// playlistInitialization) sees the same tracks and indices as the file.
 	c.playlist.Tracks = filteredTrack
 
 	return into.Sync()
