@@ -302,8 +302,8 @@ func (c *Config) refreshVODM3U(cacheFile string) error {
 		return err
 	}
 	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-	// Short timeout for refresh to avoid tying resources
-	client := &http.Client{Timeout: 6 * time.Second}
+	// Generous timeout: large-catalog providers can take 40s+ to generate an M3U.
+	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
