@@ -135,3 +135,41 @@ func TestUpsertVODCacheHandlesLargeFiles(t *testing.T) {
 		t.Fatalf("got (%d,%d), want (%d,%d)", d, tot, totalBytes, totalBytes)
 	}
 }
+
+// TestSetVODCachePathAndTitle guards the narrow setters used by the background
+// cache starter: they must move exactly one column each and leave the rest of
+// the row (status, progress counters) untouched.
+func TestSetVODCachePathAndTitle(t *testing.T) {
+	m := freshVODDB(t)
+	exp := time.Now().Add(24 * time.Hour)
+
+	if err := m.UpsertVODCache(&types.VODCacheEntry{
+		StreamID: "s", Type: "movie", Title: "Placeholder", FilePath: "/tmp/s.mp4",
+		Status: "downloading", ExpiresAt: exp, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.UpdateVODProgress("s", 1_000, 9_000); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.SetVODCachePath("s", "/cache/s.mkv"); err != nil {
+		t.Fatalf("SetVODCachePath: %v", err)
+	}
+	if err := m.SetVODCacheTitle("s", "Real Title"); err != nil {
+		t.Fatalf("SetVODCacheTitle: %v", err)
+	}
+
+	var (
+		title, path, status string
+	)
+	if err := m.db.QueryRow("SELECT title, file_path, status FROM vod_cache WHERE stream_id=$1", "s").Scan(&title, &path, &status); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if title != "Real Title" || path != "/cache/s.mkv" || status != "downloading" {
+		t.Fatalf("got (title=%q path=%q status=%q)", title, path, status)
+	}
+	if d, tot := progress(t, m, "s"); d != 1_000 || tot != 9_000 {
+		t.Fatalf("progress disturbed by setters: got (%d,%d)", d, tot)
+	}
+}
