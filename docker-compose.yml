@@ -9,6 +9,8 @@ services:
       M3U_URL: ""                      # URL or path to M3U file
       M3U_FILE_NAME: "file.m3u"        # Name of the generated M3U file
       M3U_CACHE_EXPIRATION_HOURS: "24"       # Cache expiration in hours
+      M3U_DEDUP_ENABLED: "true"           # Remove redundant tracks (duplicate stream IDs, same-title language/quality copies) from the generated M3U
+      M3U_DEDUP_PREFERRED_LANGS: "fra"    # Comma-separated ordered list of preferred audio languages for dedup (e.g. "fra,eng")
 
       # Server Configuration
       PORT: 8080                       # Port to listen on

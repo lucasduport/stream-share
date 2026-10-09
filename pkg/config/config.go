@@ -58,6 +58,14 @@ type ProxyConfig struct {
 	XtreamGenerateApiGet bool
 	M3UCacheExpiration   int
 	M3UFileName          string
+	// M3UDedupEnabled removes redundant tracks (same Xtream stream ID listed
+	// twice, or same-title copies differing only by language/quality) from
+	// the generated M3U, keeping the best source per duplicate group.
+	M3UDedupEnabled bool
+	// M3UDedupPreferredLangs is a comma-separated, ordered list of preferred
+	// audio language codes (e.g. "fra,eng"); among equal-quality duplicates
+	// the entry in the most preferred language wins.
+	M3UDedupPreferredLangs string
 	CustomEndpoint       string
 	CustomId             string
 	RemoteURL            *url.URL
