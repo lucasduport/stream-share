@@ -88,23 +88,41 @@ func (errTest) Error() string { return "boom" }
 
 func TestRetryGuardDenials(t *testing.T) {
 	b := newTestBot()
+	// A retry from the same user (Member.User.ID matches ctx.UserID).
+	inter := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Member: &discordgo.Member{User: &discordgo.User{ID: "u1"}},
+	}}
 
 	// InFlight guard
 	ctx := &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now(), InFlight: true}
-	if deny := b.retryGuard(ctx, nil); deny == "" {
+	if deny := b.retryGuard(ctx, inter); deny == "" {
 		t.Fatal("expected denial for InFlight context")
 	}
 
 	// Max attempts guard
 	ctx = &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now(), Attempts: retryMaxAttempts}
-	if deny := b.retryGuard(ctx, nil); deny == "" {
+	if deny := b.retryGuard(ctx, inter); deny == "" {
 		t.Fatal("expected denial for max attempts")
 	}
 
 	// Backoff guard
 	ctx = &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now(), LastAttempt: time.Now()}
-	if deny := b.retryGuard(ctx, nil); deny == "" {
+	if deny := b.retryGuard(ctx, inter); deny == "" {
 		t.Fatal("expected denial inside backoff window")
+	}
+
+	// Wrong user guard
+	ctx = &retryContext{Kind: retrySearch, UserID: "u1", Created: time.Now()}
+	other := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		Member: &discordgo.Member{User: &discordgo.User{ID: "u2"}},
+	}}
+	if deny := b.retryGuard(ctx, other); deny == "" {
+		t.Fatal("expected denial for wrong user")
+	}
+
+	// Fresh context: no denial
+	if deny := b.retryGuard(ctx, inter); deny != "" {
+		t.Fatalf("expected no denial for fresh context, got %q", deny)
 	}
 }
 
