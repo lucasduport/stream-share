@@ -129,6 +129,8 @@ func (c *Config) searchXtreamVOD(query string) ([]types.VODResult, error) {
 }
 
 // searchXtreamMovies queries the Xtream API for VOD movies and filters by tokens.
+// The full get_vod_streams catalog is cached (parsed) so repeated searches do
+// not re-download and re-decode the multi-tens-of-MB JSON body per query.
 func (c *Config) searchXtreamMovies(query string) ([]types.VODResult, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
@@ -136,13 +138,10 @@ func (c *Config) searchXtreamMovies(query string) ([]types.VODResult, error) {
 	}
 	tokens, _, _ := parseQueryTokens(q) // season/episode tokens ignored for movies
 	utils.DebugLog("Movies search: using Xtream client (baseURL=%s, user=%s)", c.XtreamBaseURL, utils.MaskString(c.XtreamUser.String()))
-	cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
+
+	resp, err := c.getCachedVODCatalog()
 	if err != nil {
-		return nil, err
-	}
-	resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_vod_streams", url.Values{})
-	if err != nil {
-		utils.WarnLog("Movies search: get_vod_streams failed (HTTP %d, CT=%s): %v", httpcode, contentType, err)
+		utils.WarnLog("Movies search: get_vod_streams failed: %v", err)
 		return nil, err
 	}
 	arr, ok := resp.([]interface{})
@@ -434,14 +433,16 @@ func allTokensIn(tokens []string, hay string) bool {
 	return true
 }
 
-// searchXtreamSeries searches series and flattens episodes matching the query
+// searchXtreamSeries searches series and flattens episodes matching the query.
+// The get_series catalog is cached (parsed) so repeated searches do not
+// re-download the full catalog; get_series_info calls for matching series are
+// issued with bounded parallelism instead of sequentially.
 func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return nil, nil
 	}
 	qTokens, qSeason, qEpisode := parseQueryTokens(q)
-	// Use resilient client to avoid FlexInt unmarshaling issues
 	utils.DebugLog("Series search: using resilient Xtream client (baseURL=%s, user=%s)", c.XtreamBaseURL, utils.MaskString(c.XtreamUser.String()))
 	cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
 	if err != nil {
@@ -449,9 +450,9 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 		return nil, err
 	}
 
-	resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series", url.Values{})
+	resp, err := c.getCachedSeriesCatalog()
 	if err != nil {
-		utils.WarnLog("Series search: get_series failed (HTTP %d, CT=%s): %v", httpcode, contentType, err)
+		utils.WarnLog("Series search: get_series failed: %v", err)
 		return nil, err
 	}
 
@@ -461,7 +462,15 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 		return nil, fmt.Errorf("unexpected get_series format: %T", resp)
 	}
 
-	out := make([]types.VODResult, 0, 50)
+	// First pass: collect matching series (name + id + metadata) without
+	// fetching series_info yet.
+	type seriesMatch struct {
+		name string
+		id   string
+		genre string
+		year  string
+	}
+	matches := make([]seriesMatch, 0, 16)
 	for _, item := range arr {
 		m, ok := item.(map[string]interface{})
 		if !ok {
@@ -471,7 +480,6 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 		if seriesName == "" {
 			continue
 		}
-		// Only require non-season tokens to be in the series name
 		if !allTokensIn(qTokens, seriesName) {
 			continue
 		}
@@ -479,28 +487,63 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 		if seriesID == "" || seriesID == "<nil>" {
 			continue
 		}
-		genre := fmt.Sprintf("%v", m["genre"]) // may be empty
-		year := fmt.Sprintf("%v", firstNonEmpty(m["releaseDate"], m["release_date"]))
+		matches = append(matches, seriesMatch{
+			name:  seriesName,
+			id:    seriesID,
+			genre: fmt.Sprintf("%v", m["genre"]),
+			year:  fmt.Sprintf("%v", firstNonEmpty(m["releaseDate"], m["release_date"])),
+		})
+	}
 
-		utils.DebugLog("Series search: candidate '%s' (id=%s, genre=%s, year=%s)", seriesName, seriesID, genre, year)
-		utils.DebugLog("Series search: fetching series info for '%s' (series_id=%s)", seriesName, seriesID)
-		infoResp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series_info", url.Values{"series_id": {seriesID}})
-		if err != nil {
-			utils.WarnLog("Series search: get_series_info failed for id=%s: %v (HTTP %d, CT=%s)", seriesID, err, httpcode, contentType)
+	// Second pass: fetch get_series_info for all matches with bounded
+	// parallelism (default 8 concurrent), instead of sequentially per series.
+	const maxConcurrent = 8
+	type infoResult struct {
+		match seriesMatch
+		eps   map[string]interface{} // episodes by season
+		ok    bool
+	}
+	results := make([]infoResult, len(matches))
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	for i, mt := range matches {
+		wg.Add(1)
+		go func(idx int, match seriesMatch) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			utils.DebugLog("Series search: fetching series info for '%s' (series_id=%s)", match.name, match.id)
+			infoResp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series_info", url.Values{"series_id": {match.id}})
+			if err != nil {
+				utils.WarnLog("Series search: get_series_info failed for id=%s: %v (HTTP %d, CT=%s)", match.id, err, httpcode, contentType)
+				return
+			}
+			im, ok := infoResp.(map[string]interface{})
+			if !ok {
+				utils.WarnLog("Series search: unexpected series_info format for id=%s: %T", match.id, infoResp)
+				return
+			}
+			epsBySeason, ok := im["episodes"].(map[string]interface{})
+			if !ok {
+				return
+			}
+			results[idx] = infoResult{match: match, eps: epsBySeason, ok: true}
+		}(i, mt)
+	}
+	wg.Wait()
+
+	// Third pass: flatten episodes into VOD results (single-threaded, preserves order).
+	out := make([]types.VODResult, 0, 50)
+	for _, r := range results {
+		if !r.ok {
 			continue
 		}
-		im, ok := infoResp.(map[string]interface{})
-		if !ok {
-			utils.WarnLog("Series search: unexpected series_info format for id=%s: %T", seriesID, infoResp)
-			continue
-		}
-		epsBySeason, ok := im["episodes"].(map[string]interface{})
-		if !ok {
-			// Some providers use episodes as array with season inside
-			continue
-		}
+		seriesName := r.match.name
+		genre := r.match.genre
+		year := r.match.year
 		totalEps := 0
-		for seasonStr, epsV := range epsBySeason {
+		for seasonStr, epsV := range r.eps {
 			seasonNum, _ := strconv.Atoi(seasonStr)
 			eps, ok := epsV.([]interface{})
 			if !ok {
@@ -512,7 +555,6 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 					continue
 				}
 				title := fmt.Sprintf("%v", em["title"])
-				// Apply token AND match on either episode title or series name
 				if len(qTokens) > 0 && !allTokensIn(qTokens, title) && !allTokensIn(qTokens, seriesName) {
 					continue
 				}
@@ -520,18 +562,16 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 				if streamID == "" || streamID == "<nil>" {
 					continue
 				}
-				epNum := toInt(em["episode_num"]) // best-effort
-				// Enforce numeric season/episode if specified
+				epNum := toInt(em["episode_num"])
 				if qSeason > 0 && seasonNum != qSeason {
 					continue
 				}
 				if qEpisode > 0 && epNum != qEpisode {
 					continue
 				}
-				// info subobject for duration/rating
 				var duration, rating string
 				if infoSub, ok := em["info"].(map[string]interface{}); ok {
-					duration = fmt.Sprintf("%v", infoSub["duration"]) // may be ""
+					duration = fmt.Sprintf("%v", infoSub["duration"])
 					rating = fmt.Sprintf("%v", firstNonEmpty(infoSub["rating"], infoSub["vote_average"]))
 				}
 
@@ -556,6 +596,40 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 	}
 	utils.DebugLog("Series search: returning %d results", len(out))
 	return out, nil
+}
+
+// getCachedVODCatalog returns the parsed get_vod_streams catalog, fetching and
+// caching it on first use. Concurrent callers share a single fetch.
+func (c *Config) getCachedVODCatalog() (interface{}, error) {
+	key := "vod_streams:" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
+	return fetchCatalogOnce(key, func() (interface{}, error) {
+		cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
+		if err != nil {
+			return nil, err
+		}
+		resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_vod_streams", url.Values{})
+		if err != nil {
+			return nil, fmt.Errorf("get_vod_streams failed (HTTP %d, CT=%s): %w", httpcode, contentType, err)
+		}
+		return resp, nil
+	})
+}
+
+// getCachedSeriesCatalog returns the parsed get_series catalog, fetching and
+// caching it on first use. Concurrent callers share a single fetch.
+func (c *Config) getCachedSeriesCatalog() (interface{}, error) {
+	key := "series:" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
+	return fetchCatalogOnce(key, func() (interface{}, error) {
+		cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
+		if err != nil {
+			return nil, err
+		}
+		resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series", url.Values{})
+		if err != nil {
+			return nil, fmt.Errorf("get_series failed (HTTP %d, CT=%s): %w", httpcode, contentType, err)
+		}
+		return resp, nil
+	})
 }
 
 // firstNonEmpty returns the first non-empty/non-nil value among candidates

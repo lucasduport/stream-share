@@ -19,14 +19,10 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"os"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -141,111 +137,38 @@ func (c *Config) findVODExtensionInCache(basePath, streamID string) string {
 	return ext
 }
 
-// scanVODExtension does the actual catalogue scans.
+// scanVODExtension resolves the extension via the persistent stream index,
+// which is built once per M3U file (keyed on mtime) and serves O(1) lookups.
+// This replaces the previous per-request linear scans of the full catalogue.
 func (c *Config) scanVODExtension(basePath, streamID string) string {
-	// First scan the cached VOD M3U for both movies and series
+	// First: the cached VOD M3U (movies + series).
 	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if ext := findExtInM3U(m3uPath, basePath, streamID); ext != "" {
+		if ext, _, found := lookupStreamIndex(m3uPath, basePath, streamID); found && ext != "" {
 			return ext
 		}
 	}
-	// Fallback: proxified main M3U if available
+	// Fallback: proxified main M3U if available.
 	c.ensureChannelIndex()
 	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if ext := findExtInM3U(c.proxyfiedM3UPath, basePath, streamID); ext != "" {
+		if ext, _, found := lookupStreamIndex(c.proxyfiedM3UPath, basePath, streamID); found && ext != "" {
 			return ext
 		}
 	}
 	return ""
 }
 
-// findExtInM3U scans a given M3U file for an entry path containing basePath and having
-// the last segment starting with streamID plus an extension.
-func findExtInM3U(filePath, basePath, streamID string) string {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
-			continue
-		}
-		// Quick path filter by basePath
-		if !strings.Contains(line, "/"+basePath+"/") {
-			continue
-		}
-		u, err := url.Parse(line)
-		if err != nil {
-			continue
-		}
-		last := path.Base(u.Path)
-		if strings.HasPrefix(last, streamID+".") {
-			return path.Ext(last)
-		}
-	}
-	return ""
-}
-
-// findTitleInM3U scans for the #EXTINF title associated to a given streamID URL
-func findTitleInM3U(filePath, basePath, streamID string) string {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	lastExtinf := ""
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "#EXTINF") {
-			// Capture the text after the comma as the display title
-			if idx := strings.LastIndex(line, ","); idx != -1 && idx+1 < len(line) {
-				lastExtinf = strings.TrimSpace(line[idx+1:])
-			} else {
-				lastExtinf = ""
-			}
-			continue
-		}
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
-			continue
-		}
-		if !strings.Contains(line, "/"+basePath+"/") {
-			continue
-		}
-		u, err := url.Parse(line)
-		if err != nil {
-			continue
-		}
-		last := path.Base(u.Path)
-		if strings.HasPrefix(last, streamID+".") {
-			return lastExtinf
-		}
-		// not a match; reset extinf to avoid using wrong title for unrelated URLs
-		lastExtinf = ""
-	}
-	return ""
-}
-
-// findVODTitleInCache tries to locate the display title for a given stream ID from cached M3U(s)
+// findVODTitleInCache resolves the display title via the persistent stream
+// index (O(1) lookup), replacing the previous per-request linear M3U scans.
 func (c *Config) findVODTitleInCache(basePath, streamID string) string {
 	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if t := findTitleInM3U(m3uPath, basePath, streamID); t != "" {
-			return t
+		if _, title, found := lookupStreamIndex(m3uPath, basePath, streamID); found && title != "" {
+			return title
 		}
 	}
 	c.ensureChannelIndex()
 	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if t := findTitleInM3U(c.proxyfiedM3UPath, basePath, streamID); t != "" {
-			return t
+		if _, title, found := lookupStreamIndex(c.proxyfiedM3UPath, basePath, streamID); found && title != "" {
+			return title
 		}
 	}
 	return ""

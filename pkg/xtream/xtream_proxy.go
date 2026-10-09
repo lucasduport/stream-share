@@ -49,6 +49,13 @@ const (
 	getSimpleDataTable  = "get_simple_data_table"
 )
 
+// maxResponseBytes caps how much of a provider response body is buffered in
+// memory. Large-catalog endpoints (get_vod_streams at ~87 MB today, growing)
+// need headroom; the cap exists only as a runaway-response guard, so it is set
+// well above the largest known catalog and a hit is reported loudly rather
+// than silently truncating the JSON (which would decode-fail downstream).
+const maxResponseBytes = 512 * 1024 * 1024
+
 // Client represents an Xtream API client
 type Client struct {
 	Username    string
@@ -70,9 +77,18 @@ func New(user, password, baseURL, userAgent string) (*Client, error) {
 	if insecureTLS {
 		transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	}
+	// No global timeout: large-catalog endpoints (get_vod_streams ~87 MB and
+	// growing, get_series ~53 MB) can legitimately take minutes on a slow link.
+	// The transport's ResponseHeaderTimeout bounds the wait for headers; the
+	// per-request context (when set by callers) bounds the overall exchange.
 	httpClient := &http.Client{
-		Timeout:   10 * time.Second,
-		Transport: transport,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+			DisableCompression:    true,
+			TLSClientConfig:       transport.(*http.Transport).TLSClientConfig,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return http.ErrUseLastResponse
@@ -138,10 +154,18 @@ func (c *Client) Action(cfg *config.ProxyConfig, action string, q url.Values) (r
 			continue
 		}
 		if resp.StatusCode == http.StatusOK {
-			b, err = io.ReadAll(io.LimitReader(resp.Body, 100*1024*1024))
+			// Read with a large cap; if the provider sends more, fail loudly
+			// instead of silently truncating the JSON body.
+			b, err = io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 			_ = resp.Body.Close()
 			if err != nil {
 				lastErr = err
+				continue
+			}
+			if len(b) > maxResponseBytes {
+				utils.WarnLog("Xtream action=%s response exceeded %d MB cap; refusing truncated body", action, maxResponseBytes/(1024*1024))
+				lastErr = fmt.Errorf("response exceeds %d MB cap", maxResponseBytes/(1024*1024))
+				b = nil
 				continue
 			}
 			break

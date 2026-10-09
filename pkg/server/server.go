@@ -959,17 +959,16 @@ func (c *Config) startNameIndexRefresher(stopCh <-chan struct{}) {
 }
 
 // refreshAPIChannelIndex re-fetches get_live_streams from the upstream Xtream API
-// and updates the in-memory apiChannelIndex (and persists to DB).
+// and updates the in-memory apiChannelIndex (and persists to DB). The catalog
+// fetch goes through the shared cache, so overlapping refreshes and player
+// fetches coalesce into a single provider round-trip.
 func (c *Config) refreshAPIChannelIndex() {
 	if c.XtreamBaseURL == "" {
 		return
 	}
-	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, "")
-	if err != nil {
-		utils.WarnLog("stream_names refresh: failed to create Xtream client: %v", err)
-		return
-	}
-	resp, _, _, err := client.Action(c.ProxyConfig, "get_live_streams", nil)
+	// Invalidate the cached entry so this refresh actually hits the provider.
+	invalidateCatalogCacheKey("live_streams:" + c.XtreamBaseURL + ":" + c.XtreamUser.String())
+	resp, err := c.getCachedLiveStreamsCatalog()
 	if err != nil {
 		utils.WarnLog("stream_names refresh: get_live_streams failed: %v", err)
 		return

@@ -25,15 +25,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/jamesnetherton/m3u"
 	"github.com/lucasduport/stream-share/pkg/config"
 	"github.com/lucasduport/stream-share/pkg/utils"
 	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
+	uuid "github.com/satori/go.uuid"
 )
 
 // xtreamGetAuto forwards get.php with non-credential query params preserved.
@@ -51,6 +53,10 @@ func (c *Config) xtreamGetAuto(ctx *gin.Context) {
 }
 
 // xtreamGet proxies get.php, caching the M3U on disk and guarding empty results.
+// The provider M3U is stream-rewritten to disk with line-level credential
+// replacement (constant memory), instead of being fully parsed into RAM via
+// m3u.Parse. On a 424 MB / 1.45M-track catalog this keeps peak RSS well under
+// 500 MB and removes the multi-minute parse from the first-fetch path.
 func (c *Config) xtreamGet(ctx *gin.Context) {
 	utils.DebugLog("Xtream backend request: user=%s, baseURL=%s", c.XtreamUser.String(), c.XtreamBaseURL)
 
@@ -72,33 +78,38 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
 		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
 		return
 	}
+	cacheKey := m3uURL.String()
 
 	xtreamM3uCacheLock.RLock()
-	meta, ok := xtreamM3uCache[m3uURL.String()]
+	meta, ok := xtreamM3uCache[cacheKey]
 	d := time.Since(meta.Time)
 	if !ok || d.Hours() >= float64(c.M3UCacheExpiration) {
 		utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
 		xtreamM3uCacheLock.RUnlock()
-		playlist, err := m3u.Parse(m3uURL.String())
+
+		// Stream-rewrite the provider M3U to a cache file without parsing it
+		// into RAM. The cache entry stores the rewritten file path directly.
+		cachePath := filepath.Join(os.TempDir(), uuid.NewV4().String()+".stream-share.m3u")
+		tracks, err := c.fetchAndRewriteXtreamM3U(rawURL, cachePath)
 		if err != nil {
-			_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+			_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(err))
 			return
 		}
-		if len(playlist.Tracks) == 0 {
+		if tracks == 0 {
 			_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("empty playlist returned by Xtream backend")))
 			return
 		}
-		if err := c.cacheXtreamM3u(&playlist, m3uURL.String()); err != nil {
-			_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
-			return
-		}
+		xtreamM3uCacheLock.Lock()
+		xtreamM3uCache[cacheKey] = cacheMeta{cachePath, time.Now()}
+		xtreamM3uCacheLock.Unlock()
+		utils.DebugLog("Cached stream-rewritten Xtream M3U at %s for key %s (%d tracks)", cachePath, cacheKey, tracks)
 	} else {
 		xtreamM3uCacheLock.RUnlock()
 	}
 
 	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))
 	xtreamM3uCacheLock.RLock()
-	path := xtreamM3uCache[m3uURL.String()].string
+	path := xtreamM3uCache[cacheKey].string
 	xtreamM3uCacheLock.RUnlock()
 	ctx.Header("Content-Type", "application/octet-stream")
 	ctx.File(path)
@@ -178,6 +189,9 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 	utils.InfoLog("Action\t%s requested by %s", action, ctx.ClientIP())
 	processedResp := xtreamapi.ProcessResponse(resp)
 	if action == "get_live_streams" {
+		// Store the raw parsed catalog in the shared cache so the startup
+		// warm-up and the periodic refresher reuse this fetch.
+		storeCachedCatalog("live_streams:"+c.XtreamBaseURL+":"+c.XtreamUser.String(), resp)
 		c.harvestChannelNames(processedResp)
 		if c.catchupManager != nil && c.catchupManager.IsEnabled() {
 			processedResp = c.injectCatchupFlags(processedResp)
@@ -229,13 +243,10 @@ func (c *Config) harvestChannelNames(resp interface{}) int {
 // resolved even before a player requests the list through the proxy — e.g. right
 // after a container restart, when a player (TiviMate in Xtream API mode) serves
 // the channel list from its own cache and never re-fetches it.
+// The parsed catalog is cached, so the periodic refresher and any concurrent
+// player fetches share a single provider round-trip.
 func (c *Config) warmChannelNameIndex() {
-	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, "")
-	if err != nil {
-		utils.WarnLog("Channel name warm-up: failed to create Xtream client: %v", err)
-		return
-	}
-	resp, _, _, err := client.Action(c.ProxyConfig, "get_live_streams", nil)
+	resp, err := c.getCachedLiveStreamsCatalog()
 	if err != nil {
 		utils.WarnLog("Channel name warm-up: get_live_streams failed: %v", err)
 		return
@@ -245,6 +256,25 @@ func (c *Config) warmChannelNameIndex() {
 	} else {
 		utils.WarnLog("Channel name warm-up: get_live_streams returned no usable channel names")
 	}
+}
+
+// getCachedLiveStreamsCatalog returns the parsed get_live_streams catalog,
+// fetching and caching it on first use. Shared by the startup warm-up, the
+// periodic refresher, and the player_api handler so the full live catalog is
+// fetched at most once per TTL window.
+func (c *Config) getCachedLiveStreamsCatalog() (interface{}, error) {
+	key := "live_streams:" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
+	return fetchCatalogOnce(key, func() (interface{}, error) {
+		client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, "")
+		if err != nil {
+			return nil, err
+		}
+		resp, httpcode, contentType, err := client.Action(c.ProxyConfig, "get_live_streams", nil)
+		if err != nil {
+			return nil, fmt.Errorf("get_live_streams failed (HTTP %d, CT=%s): %w", httpcode, contentType, err)
+		}
+		return resp, nil
+	})
 }
 
 func (c *Config) injectCatchupFlags(resp interface{}) interface{} {

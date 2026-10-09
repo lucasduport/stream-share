@@ -21,6 +21,7 @@ package utils
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // GetEnvOrDefault returns the environment variable value if set, otherwise the provided default.
@@ -29,6 +30,20 @@ func GetEnvOrDefault(key, defaultValue string) string {
 		return v
 	}
 	return defaultValue
+}
+
+// GetenvInt returns the environment variable parsed as an int, or 0 when unset
+// or unparseable.
+func GetenvInt(key string) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // PrintEnv prints the current environment variables
