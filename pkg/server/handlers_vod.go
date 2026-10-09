@@ -412,12 +412,80 @@ func (c *Config) startCache(ctx *gin.Context) {
 	baseDir := utils.VODCacheDir()
 	_ = os.MkdirAll(baseDir, 0o755)
 
-	// Resolve extension to build proper upstream URL
 	basePath := "movie"
 	if t == "series" {
 		basePath = "series"
 	}
-	finalID := req.StreamID
+
+	// The handler answers immediately with a placeholder extension (the one
+	// the caller sent, or the per-type default); the real extension (and title)
+	// resolution can trigger a cold VOD M3U download, which on large-catalogue
+	// providers takes far longer than any sane HTTP client timeout. That work
+	// belongs in the background download below.
+	ext := path.Ext(req.StreamID)
+	if ext == "" {
+		ext = defaultVODExt(basePath)
+	}
+	idOnly := strings.TrimSuffix(req.StreamID, path.Ext(req.StreamID))
+	filename := filepath.Join(baseDir, idOnly+ext)
+
+	// Best-effort title from what the caller already knows; the M3U lookup
+	// happens in the background fetch, which updates the entry when it lands.
+	safeTitle := vodFallbackTitle(t, req.Title, req.SeriesTitle, req.Season, req.Episode)
+
+	// Persist a pending entry
+	expires := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
+	if c.db != nil {
+		_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: req.StreamID, Type: t, Title: safeTitle, SeriesTitle: req.SeriesTitle, Season: req.Season, Episode: req.Episode, FilePath: filename, RequestedBy: req.Username, Status: "downloading", CreatedAt: time.Now(), ExpiresAt: expires})
+	}
+
+	// Spawn background download — explicit request, runs until completion regardless of viewer.
+	go func() {
+		upstream, filename := c.resolveVODCacheTarget(basePath, req.StreamID)
+		if c.db != nil {
+			_ = c.db.SetVODCachePath(req.StreamID, filename)
+			if tt := c.findVODTitleInCache(basePath, req.StreamID); strings.TrimSpace(tt) != "" {
+				_ = c.db.SetVODCacheTitle(req.StreamID, strings.TrimSpace(tt))
+			}
+		}
+		c.fetchToFile(context.Background(), upstream, filename, req.StreamID, basePath, expires)
+	}()
+
+	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
+		"cached":     false,
+		"stream_id":  req.StreamID,
+		"status":     "downloading",
+		"expires_at": expires,
+	}})
+}
+
+// defaultVODExt is the extension assumed when a stream ID carries none and the
+// catalogue cannot be consulted synchronously.
+func defaultVODExt(basePath string) string {
+	if basePath == "series" {
+		return ".mkv"
+	}
+	return ".mp4"
+}
+
+// vodFallbackTitle builds a display title from caller-supplied metadata, used
+// until the background fetch resolves the authoritative M3U title.
+func vodFallbackTitle(t, title, seriesTitle string, season, episode int) string {
+	if t == "series" && strings.TrimSpace(seriesTitle) != "" && (season > 0 || episode > 0) {
+		return fmt.Sprintf("%s — S%02dE%02d", seriesTitle, season, episode)
+	}
+	if title = strings.TrimSpace(title); title != "" {
+		return title
+	}
+	return "Unknown title"
+}
+
+// resolveVODCacheTarget resolves the real extension for a VOD stream (from the
+// cached M3U, optional network probing, or a per-type default) and returns the
+// upstream URL plus the local destination path. Meant to run off the request
+// path, where catalogue scans and a cold M3U download are affordable.
+func (c *Config) resolveVODCacheTarget(basePath, streamID string) (upstream, dest string) {
+	finalID := streamID
 	if path.Ext(finalID) == "" {
 		// 1) Try to resolve from cached M3U first (movie/series)
 		if ext := c.findVODExtensionInCache(basePath, finalID); ext != "" {
@@ -433,57 +501,16 @@ func (c *Config) startCache(ctx *gin.Context) {
 			}
 			// 3) Still unknown? Use sane defaults without probing
 			if path.Ext(finalID) == "" {
-				def := ".mp4"
-				if basePath == "series" {
-					def = ".mkv"
-				}
+				def := defaultVODExt(basePath)
 				utils.DebugLog("Cache: defaulting extension %s for %s", def, finalID)
 				finalID += def
 			}
 		}
 	}
-	upstream := fmt.Sprintf("%s/%s/%s/%s/%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, finalID)
-
-	// Build local filename as <id>.<ext> for consistency
-	ext := path.Ext(finalID)
-	if ext == "" {
-		ext = ".mp4"
-	}
-	// ensure we use the bare stream id without any accidental extension
-	idOnly := strings.TrimSuffix(req.StreamID, path.Ext(req.StreamID))
-	filename := filepath.Join(baseDir, idOnly+ext)
-
-	// Build a safe, user-friendly title to persist (prefer M3U title)
-	var safeTitle string
-	if tt := c.findVODTitleInCache(basePath, req.StreamID); strings.TrimSpace(tt) != "" {
-		safeTitle = strings.TrimSpace(tt)
-	}
-	// Fallbacks when M3U title not found
-	if safeTitle == "" && t == "series" && strings.TrimSpace(req.SeriesTitle) != "" && (req.Season > 0 || req.Episode > 0) {
-		safeTitle = fmt.Sprintf("%s — S%02dE%02d", req.SeriesTitle, req.Season, req.Episode)
-	}
-	if safeTitle == "" {
-		safeTitle = strings.TrimSpace(req.Title)
-	}
-	if safeTitle == "" {
-		safeTitle = "Unknown title"
-	}
-
-	// Persist a pending entry
-	expires := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
-	if c.db != nil {
-		_ = c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: req.StreamID, Type: t, Title: safeTitle, SeriesTitle: req.SeriesTitle, Season: req.Season, Episode: req.Episode, FilePath: filename, RequestedBy: req.Username, Status: "downloading", CreatedAt: time.Now(), ExpiresAt: expires})
-	}
-
-	// Spawn background download — explicit request, runs until completion regardless of viewer.
-	go c.fetchToFile(context.Background(), upstream, filename, req.StreamID, basePath, expires)
-
-	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{
-		"cached":     false,
-		"stream_id":  req.StreamID,
-		"status":     "downloading",
-		"expires_at": expires,
-	}})
+	upstream = fmt.Sprintf("%s/%s/%s/%s/%s", c.XtreamBaseURL, basePath, c.XtreamUser, c.XtreamPassword, finalID)
+	idOnly := strings.TrimSuffix(streamID, path.Ext(streamID))
+	dest = filepath.Join(utils.VODCacheDir(), idOnly+path.Ext(finalID))
+	return upstream, dest
 }
 
 // getCacheByStream returns cache info for a stream id
