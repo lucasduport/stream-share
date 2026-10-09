@@ -105,98 +105,87 @@ func (c *Config) pickVODExtension(ctx *gin.Context, basePath, streamID string) s
 	return ".mp4"
 }
 
-// extEntry is a memoised VOD extension lookup. A hit (non-empty ext) never
-// expires; a miss expires so the catalogue is re-scanned after a refresh.
-type extEntry struct {
-	ext     string
+// vodEntry is what a single VOD M3U entry contributes to a catalogue lookup:
+// its file extension and the #EXTINF display title attached to it.
+type vodEntry struct {
+	ext   string
+	title string
+}
+
+// entryEntry is a memoised VOD catalogue lookup. A hit never expires; a miss
+// expires so the catalogue is re-scanned after a refresh.
+type entryEntry struct {
+	entry   vodEntry
 	expires time.Time // zero for hits, which never expire
 }
 
-var vodExtCache sync.Map // basePath+"\x00"+streamID -> extEntry
+var vodEntryCache sync.Map // basePath+"\x00"+streamID -> entryEntry
 
-// findVODExtensionInCache tries to locate the original extension for a given stream ID
-// by scanning the cached VOD M3U or series entries. Returns empty string if unknown.
-// vodExtCache memoises extension lookups, which are linear scans of the
-// provider's full catalogue. This is reached per HTTP Range request whenever the
-// client omits the extension and the item is not yet cached — so during a
-// download, one playback would otherwise scan the catalogue hundreds of times.
-// A miss is memoised too, since re-scanning to find nothing again is the
-// expensive case; the entry expires so a refreshed catalogue is still picked up.
-func (c *Config) findVODExtensionInCache(basePath, streamID string) string {
+// findVODEntryInCache returns the catalogue entry (extension + title) for a
+// stream ID, scanning the cached VOD M3U or the proxified main M3U. Results
+// are memoised: the lookups are linear scans of the provider's full catalogue
+// and are reached per HTTP Range request whenever the client omits the
+// extension and the item is not yet cached — during a download, one playback
+// would otherwise scan the catalogue hundreds of times. A miss is memoised
+// too, since re-scanning to find nothing again is the expensive case; the
+// entry expires so a refreshed catalogue is still picked up.
+func (c *Config) findVODEntryInCache(basePath, streamID string) vodEntry {
 	key := basePath + "\x00" + streamID
-	if v, ok := vodExtCache.Load(key); ok {
-		e := v.(extEntry)
-		if e.ext != "" || e.expires.IsZero() || time.Now().Before(e.expires) {
-			return e.ext
+	if v, ok := vodEntryCache.Load(key); ok {
+		e := v.(entryEntry)
+		if (e.entry != vodEntry{}) || e.expires.IsZero() || time.Now().Before(e.expires) {
+			return e.entry
 		}
 	}
 
-	ext := c.scanVODExtension(basePath, streamID)
+	entry := c.scanVODEntry(basePath, streamID)
 
-	entry := extEntry{ext: ext}
-	if ext == "" {
-		entry.expires = time.Now().Add(titleMissRetryAfter)
+	e := entryEntry{entry: entry}
+	if entry == (vodEntry{}) {
+		e.expires = time.Now().Add(titleMissRetryAfter)
 	}
-	vodExtCache.Store(key, entry)
-	return ext
+	vodEntryCache.Store(key, e)
+	return entry
 }
 
-// scanVODExtension does the actual catalogue scans.
-func (c *Config) scanVODExtension(basePath, streamID string) string {
+// findVODExtensionInCache tries to locate the original extension for a given
+// stream ID by scanning the cached VOD M3U or the proxified main M3U.
+// Returns empty string if unknown.
+func (c *Config) findVODExtensionInCache(basePath, streamID string) string {
+	return c.findVODEntryInCache(basePath, streamID).ext
+}
+
+// findVODTitleInCache tries to locate the display title for a given stream ID
+// from cached M3U(s).
+func (c *Config) findVODTitleInCache(basePath, streamID string) string {
+	return c.findVODEntryInCache(basePath, streamID).title
+}
+
+// scanVODEntry does the actual catalogue scans, one pass per file.
+func (c *Config) scanVODEntry(basePath, streamID string) vodEntry {
 	// First scan the cached VOD M3U for both movies and series
 	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if ext := findExtInM3U(m3uPath, basePath, streamID); ext != "" {
-			return ext
+		if entry := findEntryInM3U(m3uPath, basePath, streamID); entry != (vodEntry{}) {
+			return entry
 		}
 	}
 	// Fallback: proxified main M3U if available
 	c.ensureChannelIndex()
 	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if ext := findExtInM3U(c.proxyfiedM3UPath, basePath, streamID); ext != "" {
-			return ext
+		if entry := findEntryInM3U(c.proxyfiedM3UPath, basePath, streamID); entry != (vodEntry{}) {
+			return entry
 		}
 	}
-	return ""
+	return vodEntry{}
 }
 
-// findExtInM3U scans a given M3U file for an entry path containing basePath and having
-// the last segment starting with streamID plus an extension.
-func findExtInM3U(filePath, basePath, streamID string) string {
+// findEntryInM3U scans a given M3U file in a single pass for the entry whose
+// URL path contains basePath and whose last segment starts with streamID plus
+// an extension. It returns the extension and the #EXTINF title preceding it.
+func findEntryInM3U(filePath, basePath, streamID string) vodEntry {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
-			continue
-		}
-		// Quick path filter by basePath
-		if !strings.Contains(line, "/"+basePath+"/") {
-			continue
-		}
-		u, err := url.Parse(line)
-		if err != nil {
-			continue
-		}
-		last := path.Base(u.Path)
-		if strings.HasPrefix(last, streamID+".") {
-			return path.Ext(last)
-		}
-	}
-	return ""
-}
-
-// findTitleInM3U scans for the #EXTINF title associated to a given streamID URL
-func findTitleInM3U(filePath, basePath, streamID string) string {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return ""
+		return vodEntry{}
 	}
 	defer func() { _ = f.Close() }()
 	sc := bufio.NewScanner(f)
@@ -218,6 +207,7 @@ func findTitleInM3U(filePath, basePath, streamID string) string {
 		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
 			continue
 		}
+		// Quick path filter by basePath
 		if !strings.Contains(line, "/"+basePath+"/") {
 			continue
 		}
@@ -227,26 +217,10 @@ func findTitleInM3U(filePath, basePath, streamID string) string {
 		}
 		last := path.Base(u.Path)
 		if strings.HasPrefix(last, streamID+".") {
-			return lastExtinf
+			return vodEntry{ext: path.Ext(last), title: lastExtinf}
 		}
 		// not a match; reset extinf to avoid using wrong title for unrelated URLs
 		lastExtinf = ""
 	}
-	return ""
-}
-
-// findVODTitleInCache tries to locate the display title for a given stream ID from cached M3U(s)
-func (c *Config) findVODTitleInCache(basePath, streamID string) string {
-	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if t := findTitleInM3U(m3uPath, basePath, streamID); t != "" {
-			return t
-		}
-	}
-	c.ensureChannelIndex()
-	if strings.TrimSpace(c.proxyfiedM3UPath) != "" {
-		if t := findTitleInM3U(c.proxyfiedM3UPath, basePath, streamID); t != "" {
-			return t
-		}
-	}
-	return ""
+	return vodEntry{}
 }

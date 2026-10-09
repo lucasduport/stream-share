@@ -105,6 +105,28 @@ func (m *DBManager) UpdateVODProgress(streamID string, downloaded, total int64) 
 	return err
 }
 
+// SetVODCachePath updates only the file_path column.
+func (m *DBManager) SetVODCachePath(streamID, path string) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := m.db.ExecContext(ctx, `UPDATE vod_cache SET file_path=$2 WHERE stream_id=$1`, streamID, path)
+	return err
+}
+
+// SetVODCacheTitle updates only the title column.
+func (m *DBManager) SetVODCacheTitle(streamID, title string) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := m.db.ExecContext(ctx, `UPDATE vod_cache SET title=$2 WHERE stream_id=$1`, streamID, title)
+	return err
+}
+
 // TouchVODCache updates last_access
 func (m *DBManager) TouchVODCache(streamID string) error {
 	if m == nil || m.db == nil {
