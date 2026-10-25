@@ -39,16 +39,32 @@ func MaskString(s string) string {
 	}
 }
 
-// MaskURL masks sensitive parts of URLs for logging.
-// It follows the same logic as the original server package helper.
+// MaskURL masks sensitive parts of URLs for logging: the user/pass path
+// segments of stream URLs (http://host/path/user/pass/id) and the username and
+// password query parameters of API URLs (get.php?username=...&password=...).
 func MaskURL(urlStr string) string {
+	query := ""
+	if i := strings.IndexByte(urlStr, '?'); i >= 0 {
+		urlStr, query = urlStr[:i], urlStr[i+1:]
+	}
 	parts := strings.Split(urlStr, "/")
 	if len(parts) >= 7 {
 		// For URLs like http://host/path/user/pass/id
 		parts[5] = MaskString(parts[5]) // Password
 		parts[4] = MaskString(parts[4]) // Username
 	}
-	return strings.Join(parts, "/")
+	out := strings.Join(parts, "/")
+	if query == "" {
+		return out
+	}
+	params := strings.Split(query, "&")
+	for i, kv := range params {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "username" || k == "password" {
+			params[i] = k + "=***"
+		}
+	}
+	return out + "?" + strings.Join(params, "&")
 }
 
 // NormalizeHostname sanitizes an operator-supplied hostname so it can be safely
