@@ -106,6 +106,75 @@ func TestRegisterVODView_appearsInStreams(t *testing.T) {
 	}
 }
 
+// TestRegisterVODView_adoptsResolvedTitle: the first Range request of a view
+// can lose the race to resolve a title and pass the raw id; a later request
+// carrying the real title must be adopted (ported from x3n0n10/stream-share#46).
+func TestRegisterVODView_adoptsResolvedTitle(t *testing.T) {
+	sm := newTestManager()
+	defer sm.Stop()
+
+	sm.RegisterUser("alice", "1.2.3.4", "")
+	sm.RegisterVODView("alice", "327914", "movie", "327914")
+	if info, ok := sm.GetStreamInfo("327914"); !ok || info.StreamTitle != "327914" {
+		t.Fatalf("expected fallback title, got %+v", info)
+	}
+
+	sm.RegisterVODView("alice", "327914", "movie", "The Real Movie Title")
+	if info, ok := sm.GetStreamInfo("327914"); !ok || info.StreamTitle != "The Real Movie Title" {
+		t.Fatalf("expected resolved title to be adopted, got %+v", info)
+	}
+}
+
+// adoptVODHistoryTitle decides when an open history row must be rewritten:
+// only while it still holds a fallback, per (stream, user) view, and it returns
+// 0 while the row's insert is in flight so recordVODHistory applies it later.
+func TestAdoptVODHistoryTitle(t *testing.T) {
+	sm := newTestManager()
+	defer sm.Stop()
+	key := streamUserKey("42", "alice")
+
+	// No open row for this view: nothing to correct.
+	if id := sm.adoptVODHistoryTitle("alice", "42", "Movie"); id != 0 {
+		t.Fatalf("no row: id = %d", id)
+	}
+
+	// Row inserted with the raw id as title.
+	sm.vodHistoryIDs[key] = 7
+	sm.vodHistoryTitles[key] = "42"
+
+	// Fallback titles never trigger a rewrite.
+	for _, title := range []string{"", "42"} {
+		if id := sm.adoptVODHistoryTitle("alice", "42", title); id != 0 {
+			t.Fatalf("fallback %q: id = %d", title, id)
+		}
+	}
+	if id := sm.adoptVODHistoryTitle("alice", "42", "Movie"); id != 7 {
+		t.Fatalf("resolved title: id = %d, want 7", id)
+	}
+	if sm.vodHistoryTitles[key] != "Movie" {
+		t.Fatalf("wanted title not recorded: %q", sm.vodHistoryTitles[key])
+	}
+	// Once corrected, the row is left alone (no rewrite per Range request).
+	if id := sm.adoptVODHistoryTitle("alice", "42", "Movie"); id != 0 {
+		t.Fatalf("already corrected: id = %d", id)
+	}
+	if id := sm.adoptVODHistoryTitle("alice", "42", "Other"); id != 0 {
+		t.Fatalf("real title must not be replaced: id = %d", id)
+	}
+
+	// Another viewer's row is tracked independently: the stream-level title
+	// is already resolved, but bob's row still holds the fallback.
+	bob := streamUserKey("42", "bob")
+	sm.vodHistoryIDs[bob] = 0 // insert still in flight
+	sm.vodHistoryTitles[bob] = ""
+	if id := sm.adoptVODHistoryTitle("bob", "42", "Movie"); id != 0 {
+		t.Fatalf("in-flight insert: id = %d, want 0", id)
+	}
+	if sm.vodHistoryTitles[bob] != "Movie" {
+		t.Fatalf("in-flight insert must still record the wanted title, got %q", sm.vodHistoryTitles[bob])
+	}
+}
+
 func TestUnregisterVODView_removesSession(t *testing.T) {
 	sm := newTestManager()
 	defer sm.Stop()

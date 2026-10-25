@@ -92,6 +92,10 @@ type SessionManager struct {
 	// (not once per Range request) and closed when the view ends. Guarded by
 	// vodViewTimersMu.
 	vodHistoryIDs map[string]int64
+	// vodHistoryTitles holds the title wanted on each open VOD history row, so
+	// a row first written with a fallback title (the raw id) is corrected once
+	// a later request resolves the real one. Guarded by vodViewTimersMu.
+	vodHistoryTitles map[string]string
 
 	// liveHistoryIDs maps an active live viewer (streamID + "\x00" + username) to
 	// its open stream_history row id. A row is opened when a user starts watching
@@ -248,6 +252,7 @@ func NewSessionManager(db *database.DBManager) *SessionManager {
 		pendingStops:       make(map[string]chan struct{}),
 		vodViewTimers:      make(map[string]*time.Timer),
 		vodHistoryIDs:      make(map[string]int64),
+		vodHistoryTitles:   make(map[string]string),
 		liveHistoryIDs:     make(map[string]int64),
 		stopChan:           make(chan struct{}),
 		httpClient: &http.Client{
