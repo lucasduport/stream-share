@@ -409,8 +409,9 @@ func TestSameUserTwoDevicesShareStream(t *testing.T) {
 	}
 }
 
-// TestSameUserTwoDevicesDifferentChannels covers two devices on one account
-// watching different channels: starting the second must not stop the first.
+// TestSameUserTwoDevicesDifferentChannels covers a device leaving a channel it
+// shares with another device of the same account for a new channel: the shared
+// channel must stay up for the device still on it.
 func TestSameUserTwoDevicesDifferentChannels(t *testing.T) {
 	var opens1, opens2 int64
 	srv1 := countingUpstream(t, &opens1)
@@ -454,6 +455,43 @@ func TestSameUserTwoDevicesDifferentChannels(t *testing.T) {
 	}
 	sm.RemoveClient("ch-b", phoneB)
 	sm.RemoveClient("ch-a", tv)
+}
+
+// TestSameUserNewChannelReplacesOtherDevicesChannel pins down what happens when
+// a second device of the same account opens a different channel while the
+// first device is alone on its channel: the server cannot tell that from one
+// device zapping (same user, usually the same IP), so the first channel is
+// released for the new one. Providers commonly allow a single connection per
+// account, so two channels at once could not both play anyway.
+func TestSameUserNewChannelReplacesOtherDevicesChannel(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	_, tv, err := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	if err != nil {
+		t.Fatalf("RequestStream tv: %v", err)
+	}
+	_, phone, err := sm.RequestStream("lucas", "ch-b", "live", "B", mustURL(t, srv2.URL))
+	if err != nil {
+		t.Fatalf("RequestStream phone: %v", err)
+	}
+	if streamActive(sm, "ch-a") {
+		t.Fatal("ch-a should be released for the account's new channel")
+	}
+	if !receiving(sm, "ch-b", phone, 2*time.Second) {
+		t.Fatal("the new channel should play")
+	}
+	sm.RemoveClient("ch-a", tv)
+	if !streamActive(sm, "ch-b") {
+		t.Fatal("the TV's handler exiting must not stop ch-b")
+	}
+	sm.RemoveClient("ch-b", phone)
 }
 
 // TestSingleDeviceSwitchStopsPrevious keeps the provider-friendly behavior for
