@@ -66,12 +66,12 @@ type ProxyConfig struct {
 	// audio language codes (e.g. "fra,eng"); among equal-quality duplicates
 	// the entry in the most preferred language wins.
 	M3UDedupPreferredLangs string
-	CustomEndpoint       string
-	CustomId             string
-	RemoteURL            *url.URL
-	AdvertisedPort       int
-	HTTPS                bool
-	User, Password       CredentialString
+	CustomEndpoint         string
+	CustomId               string
+	RemoteURL              *url.URL
+	AdvertisedPort         int
+	HTTPS                  bool
+	User, Password         CredentialString
 	// LDAP authentication fields
 	LDAPEnabled        bool
 	LDAPServer         string

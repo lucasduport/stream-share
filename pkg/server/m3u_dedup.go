@@ -17,118 +17,149 @@
 package server
 
 import (
+	"hash/fnv"
 	"net/url"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jamesnetherton/m3u"
+	"golang.org/x/text/runes"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 )
 
-// dedupEntry is one M3U track prepared for deduplication: the original track,
-// its parsed URL identity, and the metadata extracted from its title and tags.
-// order preserves the provider's original sequence so that, all else being
-// equal, the entry the provider listed first wins (stable tie-break).
-type dedupEntry struct {
-	track m3u.Track
-	order int
-
-	// basePath is the Xtream stream type ("live", "movie", "series",
-	// "timeshift", or "" for plain M3U URLs without such a segment).
-	basePath string
-	// id is the stream ID: the last URL path segment without its extension.
-	id string
-	// urlKey is the exact-identity key. For Xtream URLs it is basePath+id;
-	// for plain M3U URLs (no recognized type segment) it is the full URL, so
-	// two different sources that merely share a trailing filename are not
-	// wrongly merged.
-	urlKey string
-
-	// titleKey is the normalized title fingerprint used to group
-	// same-content entries that carry different stream IDs (typical for
-	// per-language or per-quality copies of a VOD movie).
-	titleKey string
-
-	quality  int
-	language string
-	hasLogo  bool
-	hasEPG   bool
-	hasGroup bool
-	episode  bool // title carries an SxxEyy episode marker
-	year     int
+// dedupRecord is the compact per-track state deduplication needs. Keys are
+// 64-bit FNV hashes rather than strings so a 1.45M-track catalogue costs
+// ~24 bytes per track; the collision probability at that size is ~1e-7.
+type dedupRecord struct {
+	// idKey is the exact-identity hash: Xtream stream type + stream ID, or the
+	// full URL for plain M3U entries. 0 means "no identity".
+	idKey uint64
+	// titleKey is the title-fingerprint hash, 0 when the track must never be
+	// merged by title (episodes, series, timeshift, plain M3U, empty title).
+	titleKey uint64
+	// score ranks duplicates; the highest wins, ties go to the earliest track.
+	score int32
 }
 
 // dedupQualityRank scores video-quality tokens found in titles. Higher wins.
 var dedupQualityRank = map[string]int{
-	"8k": 90, "uhd": 90, "4320p": 90,
-	"4k": 80, "2160p": 80,
+	"8k": 90, "4320p": 90,
+	"4k": 80, "uhd": 80, "2160p": 80,
 	"fhd": 70, "1080p": 70, "1080i": 65,
 	"hd": 60, "720p": 60, "hdtv": 55,
 	"sd": 40, "576p": 40, "480p": 35,
 	"240p": 20, "144p": 10,
 }
 
-// dedupLanguageTokens maps language tokens (as they appear in titles, already
-// lowercased) to a canonical ISO-ish code. Used both for scoring and for
-// stripping language markers out of the title fingerprint.
-var dedupLanguageTokens = map[string]string{
-	"vf": "fra", "vff": "fra", "vfq": "fra", "vf2": "fra", "french": "fra", "francais": "fra", "français": "fra", "fr": "fra", "fra": "fra",
-	"multi": "multi", "multiaudio": "multi",
+// dedupLangWords are release tags and language names, matched
+// case-insensitively: they are unambiguous as tags.
+var dedupLangWords = map[string]string{
+	"vf": "fra", "vff": "fra", "vfq": "fra", "vfi": "fra", "vf2": "fra", "truefrench": "fra",
+	"french": "fra", "francais": "fra",
 	"vostfr": "vostfr", "vost": "vostfr",
-	"english": "eng", "eng": "eng", "en": "eng",
-	"ita": "ita", "it": "ita", "italian": "ita", "italiano": "ita",
-	"deu": "deu", "ger": "deu", "german": "deu", "deutsch": "deu", "de": "deu",
-	"esp": "spa", "es": "spa", "spanish": "spa", "español": "spa", "spa": "spa",
-	"nld": "nld", "dut": "nld", "dutch": "nld", "nederlands": "nld", "nl": "nld",
-	"rus": "rus", "russian": "rus", "ru": "rus",
-	"jpn": "jpn", "japanese": "jpn", "ja": "jpn",
-	"kor": "kor", "korean": "kor", "ko": "kor",
-	"por": "por", "pt": "por", "brazilian": "por", "ptbr": "por", "pt-br": "por",
-	"tur": "tur", "turkish": "tur", "tr": "tur",
-	"ara": "ara", "arabic": "ara", "ar": "ara",
-	"hin": "hin", "hindi": "hin", "hi": "hin",
-	"chi": "chi", "zho": "chi", "chinese": "chi", "zh": "chi",
-	"pol": "pol", "polish": "pol", "pl": "pol",
-	"swe": "swe", "swedish": "swe", "sv": "swe",
+	"multi": "multi", "multiaudio": "multi",
+	"english": "eng",
+	"italian": "ita", "italiano": "ita",
+	"german": "deu", "deutsch": "deu",
+	"spanish": "spa", "espanol": "spa",
+	"dutch": "nld", "nederlands": "nld",
+	"russian": "rus", "japanese": "jpn", "korean": "kor",
+	"portuguese": "por", "brazilian": "por",
+	"turkish": "tur", "arabic": "ara", "hindi": "hin", "chinese": "chi",
+	"polish": "pol", "swedish": "swe",
+}
+
+// dedupLangCodes are ISO-style codes. Many double as ordinary words ("It",
+// "De", "En", "Es"), so they only count as tags when written in upper case,
+// or inside brackets.
+var dedupLangCodes = map[string]string{
+	"FR": "fra", "FRA": "fra",
+	"EN": "eng", "ENG": "eng",
+	"IT": "ita", "ITA": "ita",
+	"DE": "deu", "DEU": "deu", "GER": "deu",
+	"ES": "spa", "ESP": "spa", "SPA": "spa",
+	"NL": "nld", "NLD": "nld", "DUT": "nld",
+	"RU": "rus", "RUS": "rus",
+	"JP": "jpn", "JA": "jpn", "JPN": "jpn",
+	"KO": "kor", "KOR": "kor",
+	"PT": "por", "POR": "por", "PTBR": "por", "PT-BR": "por", "BR": "por",
+	"TR": "tur", "TUR": "tur",
+	"AR": "ara", "ARA": "ara",
+	"HI": "hin", "HIN": "hin",
+	"ZH": "chi", "CHI": "chi", "ZHO": "chi",
+	"PL": "pol", "POL": "pol",
+	"SV": "swe", "SWE": "swe",
+}
+
+// dedupAlternation joins keys longest-first so leftmost-first matching
+// prefers "PT-BR" over "PT".
+func dedupAlternation(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, regexp.QuoteMeta(k))
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j])
+		}
+		return keys[i] < keys[j]
+	})
+	return strings.Join(keys, "|")
 }
 
 var (
-	// Quality tokens matched on word boundaries (case-insensitive).
-	reDedupQuality = regexp.MustCompile(`(?i)\b(8k|uhd|4320p|4k|2160p|fhd|1080p|1080i|hd|720p|hdtv|sd|576p|480p|240p|144p)\b`)
-	// Language tokens matched on word boundaries. Longer alternatives come
-	// first so leftmost-first matching prefers them (e.g. "pt-br" over "pt").
-	reDedupLang = regexp.MustCompile(`(?i)\b(vf2|vff|vfq|vostfr|vost|multiaudio|multi|french|francais|français|english|italiano|deutsch|spanish|nederlands|russian|japanese|korean|brazilian|turkish|arabic|hindi|chinese|polish|swedish|german|dutch|vf|fra|fr|eng|en|ita|it|deu|ger|de|esp|es|spa|nld|dut|nl|rus|ru|jpn|ja|kor|ko|por|ptbr|pt-br|pt|tur|tr|ara|ar|hin|hi|chi|zho|zh|pol|pl|swe|sv)\b`)
-	// SxxEyy episode marker, canonicalized to "s01e02". The trailing group
-	// captures the following non-digit (or end of string) so markers like
-	// "S01E02V2" still match.
-	reDedupEpisode = regexp.MustCompile(`(?i)\bs(\d{1,2})\s?[e](\d{1,3})(\D|$)`)
-	// Standalone season marker (S01 without an episode part). Runs after the
-	// episode pass, so already-canonicalized "s01e02" does not match (no word
-	// boundary between the digits and the "e").
-	reDedupSeason = regexp.MustCompile(`(?i)\bs(\d{1,2})\b`)
+	dedupLangPattern = `(?:(?i:` + dedupAlternation(dedupLangWords) + `)|` + dedupAlternation(dedupLangCodes) + `)`
+
+	// Any language tag, used to detect the language for scoring.
+	reDedupLang = regexp.MustCompile(`\b` + dedupLangPattern + `\b`)
+	// A language tag at the start of the title, followed by a separator:
+	// "FR: TF1", "[FR] Dune", "|FR| Dune", "FR - Dune".
+	reDedupLangPrefix = regexp.MustCompile(`^\s*[\[\(|]?\s*` + dedupLangPattern + `\s*[\]\)|:\-]+\s*`)
+	// Quality tokens are stripped anywhere; they are not ordinary words.
+	reDedupQuality = regexp.MustCompile(`(?i)\b(8k|4320p|uhd|4k|2160p|fhd|1080p|1080i|hdtv|hd|720p|sd|576p|480p|240p|144p)\b`)
+	// SxxEyy episode marker, canonicalized to "s01e002".
+	reDedupEpisode = regexp.MustCompile(`(?i)\bs(\d{1,2})\s?e(\d{1,3})(\D|$)`)
 	// Year in parentheses/brackets/braces, e.g. (2019) or [2019].
 	reDedupYear = regexp.MustCompile(`[\(\[\{]((?:19|20)\d{2})[\)\]\}]`)
-	// Release-group style trailing dash, e.g. "-GROUP" at end of title.
-	reDedupReleaseGroup = regexp.MustCompile(`\s+-\s*[A-Za-z0-9]+\s*$`)
-	// Bracketed/parenthesized groups, e.g. "(FR)", "[4K]", "(2019)".
-	reDedupBracket = regexp.MustCompile(`[\(\[\{][^\)\]\}]*[\)\]\}]`)
+	// Unbracketed trailing year on an already-normalized title: "dune 2021".
+	reDedupTrailingYear = regexp.MustCompile(`^(.+) ((?:19|20)\d{2})$`)
+	// A bracketed group, e.g. "(FR)", "[4K]", "(2019)", "(US)".
+	reDedupBracket = regexp.MustCompile(`[\(\[\{]([^\(\)\[\]\{\}]*)[\)\]\}]`)
 	// Non-alphanumeric runs collapse to a single space.
-	reDedupNonAlpha = regexp.MustCompile(`[^a-z0-9]+`)
-	// Leading article.
-	reDedupArticle = regexp.MustCompile(`^(the|le|la|les|l|el|los|las|der|die|das|il|lo|gli|un|une|una|o|a|os|as)\s+`)
-	// tag="value" attribute extractor for raw #EXTINF lines.
-	reDedupTag = regexp.MustCompile(`([a-zA-Z0-9-]+)="([^"]*)"`)
+	reDedupNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
+	// Leading article, stripped once. Kept to unambiguous articles: "die",
+	// "das", "a" etc. start too many real titles.
+	reDedupArticle = regexp.MustCompile(`^(the|le|la|les|l) `)
 )
+
+// dedupAccentFolder is reused across calls: building a transform chain
+// allocates ~20 KB, which dominated the per-track cost on large playlists.
+var dedupAccentFolder = sync.Pool{New: func() interface{} {
+	return transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+}}
 
 // dedupAccentFold removes diacritics so "français" and "francais" compare equal.
 func dedupAccentFold(s string) string {
-	t := transform.Chain(norm.NFD, transform.RemoveFunc(func(r rune) bool {
-		return unicode.Is(unicode.Mn, r)
-	}), norm.NFC)
+	ascii := true
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return s
+	}
+	t := dedupAccentFolder.Get().(transform.Transformer)
+	defer dedupAccentFolder.Put(t)
+	t.Reset()
 	out, _, err := transform.String(t, s)
 	if err != nil {
 		return s
@@ -136,69 +167,119 @@ func dedupAccentFold(s string) string {
 	return out
 }
 
-// dedupNormalizeTitle canonicalizes a track title into a comparison key:
-// lowercase, accent-folded, leading article dropped, SxxEyy canonicalized to
-// s01e02, quality/language tokens and bracketed groups removed, punctuation
-// collapsed. Two titles that differ only by quality, language, or formatting
-// map to the same key.
-func dedupNormalizeTitle(title string) string {
-	s := dedupAccentFold(strings.ToLower(strings.TrimSpace(title)))
-	s = reDedupEpisode.ReplaceAllStringFunc(s, func(m string) string {
-		parts := reDedupEpisode.FindStringSubmatch(m)
-		if len(parts) != 4 {
-			return m
-		}
-		se, _ := strconv.Atoi(parts[1])
-		ep, _ := strconv.Atoi(parts[2])
-		return "s" + dedupPad2(se) + "e" + dedupPad3(ep) + parts[3]
+// dedupIsTagGroup reports whether a bracketed group holds only language,
+// quality or year tokens, e.g. "FR", "4K UHD", "2021", "vostfr". Inside
+// brackets codes are unambiguous, so case is ignored.
+func dedupIsTagGroup(inner string) bool {
+	fields := strings.FieldsFunc(inner, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-'
 	})
-	s = reDedupSeason.ReplaceAllStringFunc(s, func(m string) string {
-		parts := reDedupSeason.FindStringSubmatch(m)
-		if len(parts) != 2 {
-			return m
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		lower := strings.ToLower(f)
+		if _, ok := dedupLangWords[lower]; ok {
+			continue
 		}
-		se, _ := strconv.Atoi(parts[1])
-		return "s" + dedupPad2(se)
+		if _, ok := dedupLangCodes[strings.ToUpper(f)]; ok {
+			continue
+		}
+		if _, ok := dedupQualityRank[lower]; ok {
+			continue
+		}
+		if reDedupYear.MatchString("(" + f + ")") {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// dedupTitleFingerprint canonicalizes a track title into a comparison key
+// plus its release year (0 when none). Language tags at the edges of the
+// title, quality tokens, tag-only bracket groups, accents, case, punctuation,
+// a leading article and SxxEyy formatting are ignored, so two titles that
+// differ only by those map to the same key. Bracketed text that is not a tag
+// ("(US)", "(Director's Cut)") stays in the key, so it never causes a merge.
+func dedupTitleFingerprint(title string) (key string, year int) {
+	s := dedupAccentFold(strings.TrimSpace(title))
+
+	if m := reDedupYear.FindStringSubmatch(s); len(m) == 2 {
+		year, _ = strconv.Atoi(m[1])
+	}
+	s = reDedupBracket.ReplaceAllStringFunc(s, func(m string) string {
+		inner := m[1 : len(m)-1]
+		if dedupIsTagGroup(inner) {
+			return " "
+		}
+		return " " + inner + " "
 	})
-	s = reDedupReleaseGroup.ReplaceAllString(s, "")
-	s = reDedupQuality.ReplaceAllString(s, " ")
-	s = reDedupLang.ReplaceAllString(s, " ")
-	s = reDedupBracket.ReplaceAllString(s, " ")
-	s = reDedupNonAlpha.ReplaceAllString(s, " ")
-	s = strings.TrimSpace(s)
 	for {
-		next := reDedupArticle.ReplaceAllString(s, "")
-		if next == s {
+		next := reDedupLangPrefix.ReplaceAllString(s, "")
+		if next == s || strings.TrimSpace(next) == "" {
 			break
 		}
-		s = strings.TrimSpace(next)
+		s = next
+	}
+	s = reDedupQuality.ReplaceAllString(s, " ")
+	s = dedupTrimLangSuffix(s)
+
+	s = strings.ToLower(s)
+	s = reDedupEpisode.ReplaceAllStringFunc(s, func(m string) string {
+		parts := reDedupEpisode.FindStringSubmatch(m)
+		se, _ := strconv.Atoi(parts[1])
+		ep, _ := strconv.Atoi(parts[2])
+		return " s" + dedupPad(se, 2) + "e" + dedupPad(ep, 3) + parts[3]
+	})
+	s = strings.TrimSpace(reDedupNonAlnum.ReplaceAllString(s, " "))
+	s = reDedupArticle.ReplaceAllString(s, "")
+
+	// "Dune 2021" carries its year unbracketed; treat it like "Dune (2021)".
+	if m := reDedupTrailingYear.FindStringSubmatch(s); len(m) == 3 {
+		if y, _ := strconv.Atoi(m[2]); year == 0 || y == year {
+			year = y
+			s = m[1]
+		}
+	}
+	return s, year
+}
+
+// dedupTrimLangSuffix drops trailing language tags ("Dune FR", "Dune - VF"),
+// keeping at least one word. A hand-rolled scan: the equivalent end-anchored
+// regexp backtracks at every separator and dominated the per-track cost.
+func dedupTrimLangSuffix(s string) string {
+	isSep := func(r rune) bool { return unicode.IsSpace(r) || r == '-' || r == '|' || r == ':' }
+	for {
+		s = strings.TrimRightFunc(s, unicode.IsSpace)
+		i := strings.LastIndexFunc(s, isSep)
+		if i < 0 {
+			return s
+		}
+		word := s[i+1:]
+		_, isCode := dedupLangCodes[word]
+		_, isWord := dedupLangWords[strings.ToLower(word)]
+		head := strings.TrimRightFunc(s[:i], isSep)
+		if (!isCode && !isWord) || head == "" {
+			return s
+		}
+		s = head
+	}
+}
+
+func dedupPad(n, width int) string {
+	s := strconv.Itoa(n)
+	for len(s) < width {
+		s = "0" + s
 	}
 	return s
-}
-
-func dedupPad2(n int) string {
-	if n < 10 {
-		return "0" + strconv.Itoa(n)
-	}
-	return strconv.Itoa(n)
-}
-
-func dedupPad3(n int) string {
-	switch {
-	case n < 10:
-		return "00" + strconv.Itoa(n)
-	case n < 100:
-		return "0" + strconv.Itoa(n)
-	default:
-		return strconv.Itoa(n)
-	}
 }
 
 // dedupDetectQuality returns the best quality score found in the text.
 func dedupDetectQuality(text string) int {
 	best := 0
-	for _, m := range reDedupQuality.FindAllString(strings.ToLower(text), -1) {
-		if q, ok := dedupQualityRank[m]; ok && q > best {
+	for _, m := range reDedupQuality.FindAllString(text, -1) {
+		if q := dedupQualityRank[strings.ToLower(m)]; q > best {
 			best = q
 		}
 	}
@@ -206,23 +287,149 @@ func dedupDetectQuality(text string) int {
 }
 
 // dedupDetectLanguage returns the canonical language code of the first
-// language token found in the text, or "" when none is found.
+// language tag found in the text, or "" when none is found.
 func dedupDetectLanguage(text string) string {
-	m := reDedupLang.FindString(strings.ToLower(text))
+	m := reDedupLang.FindString(dedupAccentFold(text))
 	if m == "" {
 		return ""
 	}
-	return dedupLanguageTokens[m]
+	if code, ok := dedupLangCodes[m]; ok {
+		return code
+	}
+	return dedupLangWords[strings.ToLower(m)]
 }
 
-// dedupDetectYear extracts a 19xx/20xx year from bracketed/parenthesized text.
-func dedupDetectYear(title string) int {
-	m := reDedupYear.FindStringSubmatch(title)
-	if len(m) != 2 {
-		return 0
+// dedupScore ranks a track among its duplicates. Order of preference:
+//  1. Video quality (4K > 1080p > 720p > ...)
+//  2. Preferred language (configured list, in order)
+//  3. Rich metadata (logo, EPG id, group-title)
+//
+// Ties are broken by the caller on the original playlist order.
+func dedupScore(quality int, language string, hasLogo, hasEPG, hasGroup bool, preferredLangs []string) int32 {
+	score := quality * 1000
+	for i, p := range preferredLangs {
+		if language != "" && p == language {
+			score += (len(preferredLangs) - i) * 100
+			break
+		}
 	}
-	y, _ := strconv.Atoi(m[1])
-	return y
+	if hasLogo {
+		score += 10
+	}
+	if hasEPG {
+		score += 5
+	}
+	if hasGroup {
+		score += 2
+	}
+	return int32(score)
+}
+
+func dedupHash(parts ...string) uint64 {
+	h := fnv.New64a()
+	for _, p := range parts {
+		_, _ = h.Write([]byte(p))
+		_, _ = h.Write([]byte{0})
+	}
+	if v := h.Sum64(); v != 0 {
+		return v
+	}
+	return 1 // 0 is reserved for "no key"
+}
+
+// newDedupRecord builds the record for one track from its display name, URI
+// and the few EXTINF attributes scoring looks at.
+//
+// Title merging is restricted to "movie" and "live" entries without an
+// episode marker: series and timeshift IDs are usually distinct episodes, and
+// plain M3U entries carry no type, so they are only merged on an exact URL.
+// The year is part of the title key so remakes (Dune 1984 / 2021) stay apart.
+func newDedupRecord(name, uri, group string, hasLogo, hasEPG bool, preferredLangs []string) dedupRecord {
+	var rec dedupRecord
+
+	basePath := ""
+	if u, err := url.Parse(uri); err == nil {
+		basePath = extractBasePath(u.Path)
+		if basePath != "" {
+			last := path.Base(u.Path)
+			rec.idKey = dedupHash(basePath, strings.TrimSuffix(last, path.Ext(last)))
+		}
+	}
+	if rec.idKey == 0 && uri != "" {
+		rec.idKey = dedupHash(uri)
+	}
+
+	if (basePath == "movie" || basePath == "live") && !reDedupEpisode.MatchString(name) {
+		if key, year := dedupTitleFingerprint(name); key != "" {
+			rec.titleKey = dedupHash(basePath, strconv.Itoa(year), key)
+		}
+	}
+
+	// Providers often put the language/quality in group-title ("FR | 4K")
+	// and the clean name in the title, so detection looks at both.
+	detect := name
+	if group != "" {
+		detect = name + " " + group
+	}
+	rec.score = dedupScore(dedupDetectQuality(detect), dedupDetectLanguage(detect), hasLogo, hasEPG, group != "", preferredLangs)
+	return rec
+}
+
+// dedupKeep decides which records survive: records sharing an identity or a
+// title key form a group (transitively), and the best-scoring record of each
+// group is kept, the earliest one on ties.
+func dedupKeep(recs []dedupRecord) []bool {
+	n := len(recs)
+	parent := make([]int32, n)
+	for i := range parent {
+		parent[i] = int32(i)
+	}
+	find := func(x int32) int32 {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]]
+			x = parent[x]
+		}
+		return x
+	}
+	union := func(index map[uint64]int32, key uint64, i int32) {
+		if key == 0 {
+			return
+		}
+		j, ok := index[key]
+		if !ok {
+			index[key] = i
+			return
+		}
+		if ri, rj := find(i), find(j); ri != rj {
+			parent[ri] = rj
+		}
+	}
+
+	byID := make(map[uint64]int32, n)
+	byTitle := make(map[uint64]int32, n)
+	for i := range recs {
+		union(byID, recs[i].idKey, int32(i))
+		union(byTitle, recs[i].titleKey, int32(i))
+	}
+
+	best := make([]int32, n)
+	for i := range best {
+		best[i] = -1
+	}
+	for i := range recs {
+		r := find(int32(i))
+		if b := best[r]; b == -1 || recs[i].score > recs[b].score {
+			best[r] = int32(i)
+		}
+	}
+
+	keep := make([]bool, n)
+	for _, b := range best {
+		if b >= 0 {
+			keep[b] = true
+		}
+	}
+	return keep
 }
 
 // dedupTagValue returns the value of the first tag with the given name
@@ -236,236 +443,47 @@ func dedupTagValue(tags []m3u.Tag, name string) string {
 	return ""
 }
 
-// parseDedupEntry builds a dedupEntry from a track.
-func parseDedupEntry(track m3u.Track, order int) dedupEntry {
-	e := dedupEntry{track: track, order: order}
-
-	if u, err := url.Parse(track.URI); err == nil {
-		e.basePath = extractBasePath(u.Path)
-		last := path.Base(u.Path)
-		id := last
-		if ext := path.Ext(last); ext != "" {
-			id = strings.TrimSuffix(last, ext)
-		}
-		e.id = id
-		if e.basePath != "" {
-			e.urlKey = e.basePath + "\x00" + e.id
-		} else {
-			// Plain M3U without an Xtream type segment: the exact identity is
-			// the full URL, so same-named files from different sources are not
-			// merged by identity.
-			e.urlKey = track.URI
-		}
-	}
-
-	// Metadata detection looks at the title and the group-title: providers
-	// often put the language/quality in group-title (e.g. "FR | 4K") and the
-	// clean name in the title.
-	group := dedupTagValue(track.Tags, "group-title")
-	detectSource := track.Name
-	if group != "" {
-		detectSource = track.Name + " " + group
-	}
-
-	e.titleKey = dedupNormalizeTitle(track.Name)
-	e.quality = dedupDetectQuality(detectSource)
-	e.language = dedupDetectLanguage(detectSource)
-	e.hasLogo = dedupTagValue(track.Tags, "tvg-logo") != ""
-	e.hasEPG = dedupTagValue(track.Tags, "tvg-id") != ""
-	e.hasGroup = group != ""
-	e.episode = reDedupEpisode.MatchString(track.Name)
-	e.year = dedupDetectYear(track.Name)
-
-	return e
-}
-
-// dedupScore computes the preference score of an entry. Higher wins.
-// Order of preference:
-//  1. Video quality (4K > 1080p > 720p > ...)
-//  2. Preferred language (configured list, in order)
-//  3. Rich metadata (logo, EPG id, group-title)
+// deduplicateTracks removes redundant tracks from an in-memory playlist,
+// keeping the best representative of each duplicate group in the provider's
+// original order. Returns the survivors and the number of removed tracks.
 //
-// Ties are broken by the caller on the original playlist order.
-func dedupScore(e dedupEntry, preferredLangs []string) int {
-	score := e.quality * 1000
-
-	if e.language != "" {
-		rank := len(preferredLangs) + 1 // detected but not preferred
-		for i, p := range preferredLangs {
-			if strings.EqualFold(p, e.language) {
-				rank = i
-				break
-			}
-		}
-		// Invert so the most preferred language scores highest.
-		score += (len(preferredLangs) + 1 - rank) * 100
-	}
-
-	if e.hasLogo {
-		score += 10
-	}
-	if e.hasEPG {
-		score += 5
-	}
-	if e.hasGroup {
-		score += 2
-	}
-	return score
-}
-
-// dedupTitleGroupKey returns the title-fingerprint key used to merge
-// same-content entries that have different stream IDs. Entries whose title
-// carries an episode marker (SxxEyy) are never merged by title, and neither
-// are "series" or "timeshift" entries: there, distinct stream IDs are usually
-// distinct episodes, and collapsing them would lose content. The year is part
-// of the key so remakes (Dune 1984 vs Dune 2021) stay separate.
-func dedupTitleGroupKey(e dedupEntry) string {
-	if e.titleKey == "" || e.episode {
-		return ""
-	}
-	switch e.basePath {
-	case "movie", "live", "":
-		// merge allowed
-	default:
-		return ""
-	}
-	return e.basePath + "\x00" + strconv.Itoa(e.year) + "\x00" + e.titleKey
-}
-
-// dedupUnionFind is a minimal union-find over integer indices.
-type dedupUnionFind struct {
-	parent []int
-}
-
-func newDedupUnionFind(n int) *dedupUnionFind {
-	p := make([]int, n)
-	for i := range p {
-		p[i] = i
-	}
-	return &dedupUnionFind{parent: p}
-}
-
-func (uf *dedupUnionFind) find(x int) int {
-	for uf.parent[x] != x {
-		uf.parent[x] = uf.parent[uf.parent[x]]
-		x = uf.parent[x]
-	}
-	return x
-}
-
-func (uf *dedupUnionFind) union(a, b int) {
-	ra, rb := uf.find(a), uf.find(b)
-	if ra != rb {
-		uf.parent[rb] = ra
-	}
-}
-
-// deduplicateTracks removes redundant tracks from the playlist, keeping the
-// best representative of each duplicate group. The relative order of the
-// survivors matches the provider's original ordering.
-//
-// Duplicate detection has two layers:
-//   - Exact identity: same Xtream base path + stream ID (the same source
-//     listed twice, e.g. in two categories), or the exact same URL for plain
-//     M3U entries.
-//   - Title fingerprint: same normalized title (quality, language, accents,
-//     punctuation, year and SxxEyy formatting ignored) within a mergeable
-//     stream type. This collapses per-language / per-quality copies of a movie
-//     or channel into one entry. Series and timeshift entries, and any entry
-//     with an episode marker, are exempt so distinct episodes are never lost.
-//
-// preferredLangs is the ordered list of preferred audio languages (e.g.
-// ["fra"]); among equals, an entry in a preferred language wins.
-//
-// Returns the deduplicated track slice and the number of removed tracks.
+// Duplicates are the same source listed twice (same Xtream stream type + ID,
+// or the exact same URL), or same-title movie/live copies that differ only by
+// quality or language tags. See newDedupRecord for what is never merged.
 func deduplicateTracks(tracks []m3u.Track, preferredLangs []string) ([]m3u.Track, int) {
-	keep := deduplicateTrackIndices(tracks, preferredLangs)
-	out := make([]m3u.Track, 0, len(keep))
-	for _, i := range keep {
-		out = append(out, tracks[i])
+	if len(tracks) < 2 {
+		return tracks, 0
+	}
+	recs := make([]dedupRecord, len(tracks))
+	for i, tr := range tracks {
+		recs[i] = newDedupRecord(tr.Name, tr.URI,
+			dedupTagValue(tr.Tags, "group-title"),
+			dedupTagValue(tr.Tags, "tvg-logo") != "",
+			dedupTagValue(tr.Tags, "tvg-id") != "",
+			preferredLangs)
+	}
+	keep := dedupKeep(recs)
+	out := make([]m3u.Track, 0, len(tracks))
+	for i, tr := range tracks {
+		if keep[i] {
+			out = append(out, tr)
+		}
 	}
 	return out, len(tracks) - len(out)
 }
 
-// deduplicateTrackIndices returns the indices of the tracks to keep, in their
-// original relative order. It is the index-level core of deduplicateTracks, so
-// callers that already hold parallel per-track data (e.g. byte offsets in a
-// temp file) can map the decision back to their own structures without
-// matching on title/URI.
-func deduplicateTrackIndices(tracks []m3u.Track, preferredLangs []string) []int {
-	if len(tracks) < 2 {
-		keep := make([]int, len(tracks))
-		for i := range keep {
-			keep[i] = i
-		}
-		return keep
+// extinfName returns the display name of a raw #EXTINF line: the text after
+// the first comma that follows the attributes, so commas inside attribute
+// values or inside the title itself are handled.
+func extinfName(line string) string {
+	rest := line
+	if q := strings.LastIndex(rest, `"`); q != -1 {
+		rest = rest[q+1:]
 	}
-
-	entries := make([]dedupEntry, len(tracks))
-	for i, tr := range tracks {
-		entries[i] = parseDedupEntry(tr, i)
+	if i := strings.Index(rest, ","); i != -1 {
+		return strings.TrimSpace(rest[i+1:])
 	}
-
-	uf := newDedupUnionFind(len(entries))
-
-	// Layer 1: exact identity.
-	byKey := make(map[string]int, len(entries))
-	for i, e := range entries {
-		if e.urlKey == "" {
-			continue
-		}
-		if j, ok := byKey[e.urlKey]; ok {
-			uf.union(i, j)
-		} else {
-			byKey[e.urlKey] = i
-		}
-	}
-
-	// Layer 2: title fingerprint.
-	byTitle := make(map[string]int, len(entries))
-	for i, e := range entries {
-		k := dedupTitleGroupKey(e)
-		if k == "" {
-			continue
-		}
-		if j, ok := byTitle[k]; ok {
-			uf.union(i, j)
-		} else {
-			byTitle[k] = i
-		}
-	}
-
-	// Pick the best representative per group.
-	groups := make(map[int][]int, len(entries))
-	for i := range entries {
-		root := uf.find(i)
-		groups[root] = append(groups[root], i)
-	}
-
-	keep := make([]bool, len(entries))
-	for _, members := range groups {
-		if len(members) == 1 {
-			keep[members[0]] = true
-			continue
-		}
-		best := members[0]
-		bestScore := dedupScore(entries[best], preferredLangs)
-		for _, m := range members[1:] {
-			s := dedupScore(entries[m], preferredLangs)
-			if s > bestScore || (s == bestScore && entries[m].order < entries[best].order) {
-				best, bestScore = m, s
-			}
-		}
-		keep[best] = true
-	}
-
-	indices := make([]int, 0, len(entries))
-	for i := range entries {
-		if keep[i] {
-			indices = append(indices, i)
-		}
-	}
-	return indices
+	return ""
 }
 
 // dedupPreferredLanguages parses a comma-separated list of preferred language

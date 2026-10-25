@@ -35,51 +35,68 @@ func xtreamURI(kind, id string) string {
 	return "http://provider.example.com/" + kind + "/xtreamuser/xtreampass/" + id
 }
 
-func TestDedupNormalizeTitle(t *testing.T) {
+func TestDedupTitleFingerprint(t *testing.T) {
 	cases := []struct {
 		a, b string
-		want bool // a and b must map to the same key
+		want bool // a and b must fingerprint (key + year) the same
 	}{
 		{"Dune (2021) 4K UHD", "dune 2021", true},
 		{"Dune (2021) 4K UHD FR", "DUNE [2021]", true},
+		{"Dune (2021) [VF] 1080p", "Dune (2021)", true},
+		{"FR: Dune (2021)", "|FR| Dune (2021)", true},
 		{"Le Seigneur des Anneaux", "seigneur des anneaux", true},
 		{"The Office S01E02", "the office s1e2", true},
 		{"The Office S01E02", "The Office S01E03", false},
 		{"Film FR", "Film EN", true},
 		{"Français Accentué", "francais accentue", true},
-		{"Movie (2019)", "Movie (2021)", false}, // year differs
+		{"Movie (2019)", "Movie (2021)", false},
+		{"Movie 2019", "Movie (2021)", false},
 		{"Canal+ Sport 1 HD", "Canal+ Sport 1 4K", true},
 		{"TLC", "tlc", true},
+		// Never merged: these are distinct content, not tag variants.
+		{"Mission Impossible - Fallout", "Mission Impossible", false},
+		{"The Office (US)", "The Office (UK)", false},
+		{"It", "Es", false}, // titles, not language tags
+		{"Cars 2", "Cars 3", false},
+		{"Die Hard", "Hard", false},
+		{"Dune", "Dune (2021)", false}, // unknown year never matches a known one
 	}
 	for _, tc := range cases {
-		ka, kb := dedupNormalizeTitle(tc.a), dedupNormalizeTitle(tc.b)
-		if (ka == kb) != tc.want {
-			t.Errorf("normalize(%q)=%q normalize(%q)=%q, want equal=%v", tc.a, ka, tc.b, kb, tc.want)
+		ka, ya := dedupTitleFingerprint(tc.a)
+		kb, yb := dedupTitleFingerprint(tc.b)
+		if (ka == kb && ya == yb) != tc.want {
+			t.Errorf("fingerprint(%q)=(%q,%d) fingerprint(%q)=(%q,%d), want equal=%v", tc.a, ka, ya, tc.b, kb, yb, tc.want)
 		}
+	}
+	// Titles made only of tags keep something to compare on.
+	if k, _ := dedupTitleFingerprint("FR"); k == "" {
+		t.Error(`fingerprint("FR") is empty`)
 	}
 }
 
 func TestDedupDetectMetadata(t *testing.T) {
 	if q := dedupDetectQuality("Movie 4K UHD"); q != 80 {
-		t.Errorf("quality 4K = %d, want 80", q)
+		t.Errorf("quality 4K UHD = %d, want 80", q)
+	}
+	if q := dedupDetectQuality("Movie 8K"); q != 90 {
+		t.Errorf("quality 8K = %d, want 90", q)
 	}
 	if q := dedupDetectQuality("Movie HD 720p"); q != 60 {
 		t.Errorf("quality 720p = %d, want 60", q)
 	}
-	if l := dedupDetectLanguage("Film VF"); l != "fra" {
-		t.Errorf("lang VF = %q, want fra", l)
+	cases := map[string]string{
+		"Film VF":         "fra",
+		"Film VOSTFR":     "vostfr",
+		"Film ITA":        "ita",
+		"Film Français":   "fra",
+		"Plain Movie":     "",
+		"It Follows":      "", // "It" is a word, not Italian
+		"Film PT-BR 720p": "por",
 	}
-	if l := dedupDetectLanguage("Film VOSTFR"); l != "vostfr" {
-		t.Errorf("lang VOSTFR = %q, want vostfr", l)
-	}
-	if l := dedupDetectLanguage("Film ITA"); l != "ita" {
-		t.Errorf("lang ITA = %q, want ita", l)
-	}
-	if l := dedupDetectLanguage("Plain Movie"); l != "" {
-		t.Errorf("lang none = %q, want empty", l)
-	}
-	if y := dedupDetectYear("Dune (2021)"); y != 2021 {
-		t.Errorf("year = %d, want 2021", y)
+	for in, want := range cases {
+		if got := dedupDetectLanguage(in); got != want {
+			t.Errorf("language(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -227,13 +244,13 @@ http://provider.example.com/series/xtreamuser/xtreampass/5002.mkv
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seen != 5 {
-		t.Fatalf("seen = %d, want 5", seen)
+	if seen != 6 {
+		t.Fatalf("seen = %d, want 6", seen)
 	}
-	// 5 seen -> 3 kept: duplicate channel, one of the two Dune copies; both
+	// 6 seen -> 4 kept: the duplicate channel and the VF Dune copy go; both
 	// episodes survive.
-	if written != 3 {
-		t.Fatalf("written = %d, want 3", written)
+	if written != 4 {
+		t.Fatalf("written = %d, want 4", written)
 	}
 
 	data, err := os.ReadFile(dest)
@@ -303,7 +320,7 @@ http://provider.example.com/live/u/p/3.ts
 	i1 := strings.Index(out, "lu/lp/1.ts")
 	i2 := strings.Index(out, "lu/lp/2.ts")
 	i3 := strings.Index(out, "lu/lp/3.ts")
-	if !(i1 != -1 && i1 < i2 && i2 < i3) {
+	if i1 == -1 || i1 >= i2 || i2 >= i3 {
 		t.Errorf("survivors out of order:\n%s", out)
 	}
 	if got := strings.Count(out, "lu/lp/1.ts"); got != 1 {
@@ -311,16 +328,17 @@ http://provider.example.com/live/u/p/3.ts
 	}
 }
 
-func TestParseExtinfLine(t *testing.T) {
-	name, length, tags := parseExtinfLine(`#EXTINF:-1 tvg-id="ch1" group-title="Sports",Channel One`)
-	if name != "Channel One" {
-		t.Errorf("name = %q", name)
+func TestExtinfName(t *testing.T) {
+	cases := map[string]string{
+		`#EXTINF:-1 tvg-id="ch1" group-title="Sports",Channel One`: "Channel One",
+		`#EXTINF:-1 group-title="Films, VF",Dune, Part Two`:        "Dune, Part Two",
+		`#EXTINF:-1,Plain`: "Plain",
+		`#EXTINF:-1`:       "",
 	}
-	if length != -1 {
-		t.Errorf("length = %d", length)
-	}
-	if dedupTagValue(tags, "tvg-id") != "ch1" || dedupTagValue(tags, "group-title") != "Sports" {
-		t.Errorf("tags = %+v", tags)
+	for in, want := range cases {
+		if got := extinfName(in); got != want {
+			t.Errorf("extinfName(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
