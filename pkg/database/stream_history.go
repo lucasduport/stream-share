@@ -56,6 +56,20 @@ func (m *DBManager) AddStreamHistory(username, streamID, streamType, streamTitle
 	return id, nil
 }
 
+// UpdateStreamHistoryTitle overwrites the stored title of an existing
+// stream_history row. A VOD view's row is inserted by its first request, which
+// can carry a fallback title (the raw stream id) when the real one resolves
+// only later; this corrects the row in place.
+func (m *DBManager) UpdateStreamHistoryTitle(historyID int64, title string) error {
+	if m == nil || m.db == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := m.db.ExecContext(ctx, `UPDATE stream_history SET stream_title = $1 WHERE id = $2`, title, historyID)
+	return err
+}
+
 // CloseStreamHistory marks a stream session as ended
 func (m *DBManager) CloseStreamHistory(historyID int64) error {
 	utils.DebugLog("Database: Closing stream history record %d", historyID)

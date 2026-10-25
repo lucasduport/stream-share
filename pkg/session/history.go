@@ -55,6 +55,7 @@ func (sm *SessionManager) RegisterVODView(username, streamID, streamType, title 
 	// called on every Range request; recordVODHistory de-duplicates so only the
 	// first request for a (user, stream) view inserts a row.
 	sm.recordVODHistory(username, streamID, streamType, title)
+	sm.correctVODHistoryTitle(username, streamID, title)
 
 	sm.userLock.Lock()
 	if sess, exists := sm.userSessions[username]; exists {
@@ -118,9 +119,17 @@ func (sm *SessionManager) recordVODHistory(username, streamID, streamType, title
 	}
 	key := streamUserKey(streamID, username)
 
-	if !reserveHistorySlot(&sm.vodViewTimersMu, sm.vodHistoryIDs, key) {
+	// Reserve the slot and record the row's title in one critical section, so
+	// a concurrent request carrying the resolved title always finds the entry
+	// to correct (see adoptVODHistoryTitle).
+	sm.vodViewTimersMu.Lock()
+	if _, exists := sm.vodHistoryIDs[key]; exists {
+		sm.vodViewTimersMu.Unlock()
 		return
 	}
+	sm.vodHistoryIDs[key] = 0 // insert in flight
+	sm.vodHistoryTitles[key] = title
+	sm.vodViewTimersMu.Unlock()
 
 	ip, ua := "", ""
 	sm.userLock.RLock()
@@ -134,12 +143,60 @@ func (sm *SessionManager) recordVODHistory(username, streamID, streamType, title
 		utils.ErrorLog("Failed to record VOD stream history: %v", err)
 		sm.vodViewTimersMu.Lock()
 		delete(sm.vodHistoryIDs, key)
+		delete(sm.vodHistoryTitles, key)
 		sm.vodViewTimersMu.Unlock()
 		return
 	}
 	sm.vodViewTimersMu.Lock()
 	sm.vodHistoryIDs[key] = id
+	want := sm.vodHistoryTitles[key]
 	sm.vodViewTimersMu.Unlock()
+
+	// A concurrent request may have resolved the real title while this insert
+	// was in flight; it could not update a row without an id, so do it here.
+	if want != title {
+		sm.setVODHistoryTitle(id, want)
+	}
+}
+
+// correctVODHistoryTitle carries a resolved title over to the open history row
+// of a (stream, user) view whose row still holds a fallback (empty or the raw
+// stream id). RegisterVODView runs on every Range request and the first one
+// often has no title yet, so without this /history keeps showing the id for
+// the whole view.
+func (sm *SessionManager) correctVODHistoryTitle(username, streamID, title string) {
+	if sm.db == nil {
+		return
+	}
+	// id 0 means the insert is still in flight: recordVODHistory picks the
+	// new title up once it lands.
+	if id := sm.adoptVODHistoryTitle(username, streamID, title); id > 0 {
+		sm.setVODHistoryTitle(id, title)
+	}
+}
+
+// adoptVODHistoryTitle records title as the wanted title of the view's open
+// history row when that row still holds a fallback, and returns the row id to
+// update (0 when there is nothing to write yet, or nothing to correct).
+func (sm *SessionManager) adoptVODHistoryTitle(username, streamID, title string) int64 {
+	if title == "" || title == streamID {
+		return 0
+	}
+	key := streamUserKey(streamID, username)
+	sm.vodViewTimersMu.Lock()
+	defer sm.vodViewTimersMu.Unlock()
+	cur, ok := sm.vodHistoryTitles[key]
+	if !ok || (cur != "" && cur != streamID) {
+		return 0
+	}
+	sm.vodHistoryTitles[key] = title
+	return sm.vodHistoryIDs[key]
+}
+
+func (sm *SessionManager) setVODHistoryTitle(id int64, title string) {
+	if err := sm.db.UpdateStreamHistoryTitle(id, title); err != nil {
+		utils.WarnLog("Failed to update VOD stream history title for %d: %v", id, err)
+	}
 }
 
 // closeVODHistory marks a VOD view's stream_history row as ended, if one is open.
@@ -149,6 +206,7 @@ func (sm *SessionManager) closeVODHistory(username, streamID string) {
 	id, ok := sm.vodHistoryIDs[key]
 	if ok {
 		delete(sm.vodHistoryIDs, key)
+		delete(sm.vodHistoryTitles, key)
 	}
 	sm.vodViewTimersMu.Unlock()
 	if ok && id > 0 && sm.db != nil {
