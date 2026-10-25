@@ -169,6 +169,18 @@ func titleResolvedStore(streamID, title string) {
 	titleResolvedMu.Unlock()
 }
 
+// forgetTitleMisses drops memoised misses for ids that now have a title, so
+// the next lookup finds it instead of waiting out titleMissRetryAfter.
+func forgetTitleMisses(titles map[string]string) {
+	titleResolvedMu.Lock()
+	for id := range titles {
+		if a, ok := titleResolvedIndex[id]; ok && a.title == "" {
+			delete(titleResolvedIndex, id)
+		}
+	}
+	titleResolvedMu.Unlock()
+}
+
 // resolveTitleAtStart resolves a stream's title when it first starts, allowed to
 // hit the network for VOD. Used off the lock to populate StreamTitle and warm the
 // VOD cache so subsequent (locked) log lookups resolve from cache.
@@ -205,8 +217,16 @@ func (c *Config) resolveTitleAtStart(streamID, streamType string) (string, bool)
 		}
 	case "series":
 		// get_vod_info is keyed by a movie vod_id and cannot resolve a series
-		// episode id, so series rely on the cached VOD M3U title when available.
-		title = strings.TrimSpace(c.findVODTitleInCache("series", streamID))
+		// episode id. Use, in order: a title harvested from a get_series_info
+		// answer (see series_titles.go), the series metadata of a cached
+		// episode, then the cached VOD M3U.
+		if name, ok := vodNameCached(streamID); ok {
+			title = strings.TrimSpace(name)
+		} else if t := c.seriesTitleFromVODCache(streamID); t != "" {
+			title = t
+		} else {
+			title = strings.TrimSpace(c.findVODTitleInCache("series", streamID))
+		}
 	}
 
 	if title != "" || vodM3UCached() {

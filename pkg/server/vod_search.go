@@ -598,6 +598,7 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 				utils.WarnLog("Series search: unexpected series_info format for id=%s: %T", match.id, infoResp)
 				return
 			}
+			c.harvestSeriesEpisodeTitles(match.name, im)
 			epsBySeason, ok := im["episodes"].(map[string]interface{})
 			if !ok {
 				return

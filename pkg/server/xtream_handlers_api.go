@@ -207,6 +207,13 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 
 	utils.InfoLog("Action\t%s requested by %s", action, ctx.ClientIP())
 	processedResp := xtreamapi.ProcessResponse(resp)
+	if action == "get_series_info" {
+		// Players browse a series right before playing an episode: keep its
+		// episode titles so the playback shows up named in /status and history.
+		if info, ok := resp.(map[string]interface{}); ok {
+			c.harvestSeriesEpisodeTitles("", info)
+		}
+	}
 	if action == "get_live_streams" {
 		// Store the raw parsed catalog in the shared cache so the startup
 		// warm-up and the periodic refresher reuse this fetch.
