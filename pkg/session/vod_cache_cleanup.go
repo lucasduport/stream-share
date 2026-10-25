@@ -118,6 +118,11 @@ func (sm *SessionManager) reapVODOrphans() {
 		if de.IsDir() {
 			continue
 		}
+		// The VOD M3U catalogue lives here too but is no row's file; losing it
+		// means a multi-minute re-download on big providers.
+		if de.Name() == "vod_cache.m3u" {
+			continue
+		}
 		full := filepath.Join(cacheDir, de.Name())
 		// A finished media file referenced by a row is governed by that row's
 		// expiry/staleness, not this sweep. ".part" files are never referenced

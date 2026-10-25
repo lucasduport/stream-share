@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,18 @@ func (c *Config) xtreamGetAuto(ctx *gin.Context) {
 	}
 	ctx.Request.URL.RawQuery = newQuery.Encode()
 	c.xtreamGet(ctx)
+}
+
+// xtreamGetRefreshMu serialises get.php M3U refreshes (see xtreamGet).
+var xtreamGetRefreshMu sync.Mutex
+
+// xtreamM3uFresh reports whether cacheKey has a cached M3U younger than the
+// configured expiration.
+func (c *Config) xtreamM3uFresh(cacheKey string) bool {
+	xtreamM3uCacheLock.RLock()
+	defer xtreamM3uCacheLock.RUnlock()
+	meta, ok := xtreamM3uCache[cacheKey]
+	return ok && time.Since(meta.Time).Hours() < float64(c.M3UCacheExpiration)
 }
 
 // xtreamGet proxies get.php, caching the M3U on disk and guarding empty results.
@@ -80,31 +93,37 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
 	}
 	cacheKey := m3uURL.String()
 
-	xtreamM3uCacheLock.RLock()
-	meta, ok := xtreamM3uCache[cacheKey]
-	d := time.Since(meta.Time)
-	if !ok || d.Hours() >= float64(c.M3UCacheExpiration) {
-		utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
-		xtreamM3uCacheLock.RUnlock()
-
-		// Stream-rewrite the provider M3U to a cache file without parsing it
-		// into RAM. The cache entry stores the rewritten file path directly.
-		cachePath := filepath.Join(os.TempDir(), uuid.NewV4().String()+".stream-share.m3u")
-		tracks, err := c.fetchAndRewriteXtreamM3U(rawURL, cachePath)
-		if err != nil {
-			_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(err))
-			return
+	if !c.xtreamM3uFresh(cacheKey) {
+		// One refresh at a time: on a big, slow provider every concurrent
+		// player would otherwise start its own multi-hundred-MB download.
+		// Waiters re-check freshness and reuse the leader's result.
+		xtreamGetRefreshMu.Lock()
+		if !c.xtreamM3uFresh(cacheKey) {
+			utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
+			// Stream-rewrite the provider M3U to a cache file without parsing
+			// it into RAM. The cache entry stores the rewritten file path.
+			cachePath := filepath.Join(os.TempDir(), uuid.NewV4().String()+".stream-share.m3u")
+			tracks, err := c.fetchAndRewriteXtreamM3U(rawURL, cachePath)
+			if err == nil && tracks == 0 {
+				err = fmt.Errorf("empty playlist returned by Xtream backend")
+			}
+			if err != nil {
+				xtreamGetRefreshMu.Unlock()
+				_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(err))
+				return
+			}
+			xtreamM3uCacheLock.Lock()
+			old := xtreamM3uCache[cacheKey].string
+			xtreamM3uCache[cacheKey] = cacheMeta{cachePath, time.Now()}
+			xtreamM3uCacheLock.Unlock()
+			if old != "" && old != cachePath {
+				// Each refresh writes a new file; drop the previous one once
+				// in-flight responses have had time to open it.
+				time.AfterFunc(time.Minute, func() { _ = os.Remove(old) })
+			}
+			utils.DebugLog("Cached stream-rewritten Xtream M3U at %s for key %s (%d tracks)", cachePath, cacheKey, tracks)
 		}
-		if tracks == 0 {
-			_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(fmt.Errorf("empty playlist returned by Xtream backend")))
-			return
-		}
-		xtreamM3uCacheLock.Lock()
-		xtreamM3uCache[cacheKey] = cacheMeta{cachePath, time.Now()}
-		xtreamM3uCacheLock.Unlock()
-		utils.DebugLog("Cached stream-rewritten Xtream M3U at %s for key %s (%d tracks)", cachePath, cacheKey, tracks)
-	} else {
-		xtreamM3uCacheLock.RUnlock()
+		xtreamGetRefreshMu.Unlock()
 	}
 
 	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))

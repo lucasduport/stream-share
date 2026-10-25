@@ -128,6 +128,11 @@ func (c *Config) findVODExtensionInCache(basePath, streamID string) string {
 	}
 
 	ext := c.scanVODExtension(basePath, streamID)
+	if ext == "" && !vodM3UCached() {
+		// The catalogue is still downloading: this miss says nothing, so
+		// don't memoise it or lookups keep failing after the file lands.
+		return ""
+	}
 
 	entry := extEntry{ext: ext}
 	if ext == "" {

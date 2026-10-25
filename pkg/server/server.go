@@ -383,6 +383,13 @@ func (c *Config) Serve() error {
 	// resolve names immediately, without waiting for a player to request the list.
 	go c.warmChannelNameIndex()
 
+	// Start the VOD M3U download now: on big catalogues it takes minutes, and
+	// lookups never wait for it, so starting early is what makes extensions and
+	// titles available by the time the first VOD is requested.
+	if c.XtreamBaseURL != "" {
+		_, _ = c.ensureVODM3UCache()
+	}
+
 	// Start background goroutine to keep apiChannelIndex fresh.
 	nameRefreshStop := make(chan struct{})
 	c.startNameIndexRefresher(nameRefreshStop)

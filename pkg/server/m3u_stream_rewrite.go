@@ -156,14 +156,15 @@ func (c *Config) fetchAndRewriteXtreamM3U(rawURL, destPath string) (int64, error
 	}
 	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
 	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Encoding", "identity")
+	// Accept-Encoding is left to the transport so it asks for gzip and
+	// decompresses transparently: M3U text shrinks ~10x on the wire, which
+	// dominates download time on a slow provider.
 
 	client := &http.Client{
 		Timeout: 0, // no global timeout; the download may take minutes for 400+ MB
 		Transport: &http.Transport{
 			ResponseHeaderTimeout: 60 * time.Second,
 			IdleConnTimeout:       90 * time.Second,
-			DisableCompression:    true,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {

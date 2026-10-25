@@ -56,7 +56,7 @@ func (b *Bot) startVODCacheFromSelection(s *discordgo.Session, channelID, userID
 		"episode":      selected.Episode,
 		"days":         days,
 	}
-	ok, resp, err = b.makeAPIRequest("POST", "/cache/start", payload)
+	ok, resp, err = b.makeSlowAPIRequest("POST", "/cache/start", payload)
 	if err != nil || !ok {
 		b.failWithRetry(channelID, retryCtx, "❌ Cache Start Failed", apiErrorMessage("Failed to start caching", err, resp))
 		return
