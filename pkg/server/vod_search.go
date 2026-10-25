@@ -676,35 +676,13 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 // getCachedVODCatalog returns the parsed get_vod_streams catalog, fetching and
 // caching it on first use. Concurrent callers share a single fetch.
 func (c *Config) getCachedVODCatalog() (interface{}, error) {
-	key := "vod_streams:" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
-	return fetchCatalogOnce(key, func() (interface{}, error) {
-		cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
-		if err != nil {
-			return nil, err
-		}
-		resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_vod_streams", url.Values{})
-		if err != nil {
-			return nil, fmt.Errorf("get_vod_streams failed (HTTP %d, CT=%s): %w", httpcode, contentType, err)
-		}
-		return resp, nil
-	})
+	return fetchCatalogOnce(c.catalogKey("get_vod_streams", ""), c.catalogFetcher("get_vod_streams", url.Values{}))
 }
 
 // getCachedSeriesCatalog returns the parsed get_series catalog, fetching and
 // caching it on first use. Concurrent callers share a single fetch.
 func (c *Config) getCachedSeriesCatalog() (interface{}, error) {
-	key := "series:" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
-	return fetchCatalogOnce(key, func() (interface{}, error) {
-		cli, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, utils.GetIPTVUserAgent())
-		if err != nil {
-			return nil, err
-		}
-		resp, httpcode, contentType, err := cli.Action(c.ProxyConfig, "get_series", url.Values{})
-		if err != nil {
-			return nil, fmt.Errorf("get_series failed (HTTP %d, CT=%s): %w", httpcode, contentType, err)
-		}
-		return resp, nil
-	})
+	return fetchCatalogOnce(c.catalogKey("get_series", ""), c.catalogFetcher("get_series", url.Values{}))
 }
 
 // firstNonEmpty returns the first non-empty/non-nil value among candidates
