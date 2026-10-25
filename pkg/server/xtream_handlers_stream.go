@@ -86,8 +86,22 @@ func (c *Config) xtreamStream(ctx *gin.Context, oriURL *url.URL) {
 	c.multiplexedStream(ctx, oriURL)
 }
 
+// rejectFilteredLive answers 404 for a live channel the catalogue filter hides
+// from players, so it cannot be played by id either. It only knows ids from
+// the cached live catalogue and lets unknown ones through.
+func (c *Config) rejectFilteredLive(ctx *gin.Context, id string) bool {
+	if c.catalogFilter == nil || !c.liveStreamFiltered(id) {
+		return false
+	}
+	ctx.AbortWithStatus(http.StatusNotFound)
+	return true
+}
+
 func (c *Config) xtreamStreamHandler(ctx *gin.Context) {
 	id := ctx.Param("id")
+	if c.rejectFilteredLive(ctx, id) {
+		return
+	}
 	rpURL, err := url.Parse(fmt.Sprintf("%s/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
 	if err != nil {
 		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
@@ -98,6 +112,9 @@ func (c *Config) xtreamStreamHandler(ctx *gin.Context) {
 
 func (c *Config) xtreamStreamLive(ctx *gin.Context) {
 	id := ctx.Param("id")
+	if c.rejectFilteredLive(ctx, id) {
+		return
+	}
 	rpURL, err := url.Parse(fmt.Sprintf("%s/live/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
 	if err != nil {
 		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
@@ -401,6 +418,9 @@ func (c *Config) xtreamStreamSeries(ctx *gin.Context) {
 // Direct handlers using proxy credentials
 func (c *Config) xtreamProxyCredentialsStreamHandler(ctx *gin.Context) {
 	id := ctx.Param("id")
+	if c.rejectFilteredLive(ctx, id) {
+		return
+	}
 	utils.DebugLog("Direct stream request with proxy credentials: username=%s, id=%s", ctx.Param("username"), id)
 	rpURL, err := url.Parse(fmt.Sprintf("%s/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
 	if err != nil {
@@ -413,6 +433,9 @@ func (c *Config) xtreamProxyCredentialsStreamHandler(ctx *gin.Context) {
 
 func (c *Config) xtreamProxyCredentialsLiveStreamHandler(ctx *gin.Context) {
 	id := ctx.Param("id")
+	if c.rejectFilteredLive(ctx, id) {
+		return
+	}
 	utils.DebugLog("Direct live stream request with proxy credentials: username=%s, id=%s", ctx.Param("username"), id)
 	rpURL, err := url.Parse(fmt.Sprintf("%s/live/%s/%s/%s", c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, id))
 	if err != nil {

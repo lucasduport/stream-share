@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/lucasduport/stream-share/pkg/filter"
 )
 
 // Add Debugging Logging option
@@ -72,6 +74,12 @@ type ProxyConfig struct {
 	AdvertisedPort         int
 	HTTPS                  bool
 	User, Password         CredentialString
+
+	// CatalogFilter keeps only the catalogue entries (live channels, movies,
+	// series) that pass its regular expressions, in every list served to
+	// players: player_api, get.php and xmltv.php. Empty filters nothing.
+	CatalogFilter filter.Config
+
 	// LDAP authentication fields
 	LDAPEnabled        bool
 	LDAPServer         string

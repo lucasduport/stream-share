@@ -39,6 +39,7 @@ import (
 	"github.com/lucasduport/stream-share/pkg/config"
 	"github.com/lucasduport/stream-share/pkg/database"
 	"github.com/lucasduport/stream-share/pkg/discord"
+	"github.com/lucasduport/stream-share/pkg/filter"
 	"github.com/lucasduport/stream-share/pkg/session"
 	"github.com/lucasduport/stream-share/pkg/slate"
 	"github.com/lucasduport/stream-share/pkg/utils"
@@ -95,6 +96,10 @@ type Config struct {
 
 	// inProgressDownloads guards against concurrent duplicate fetchToFile goroutines
 	inProgressDownloads sync.Map
+
+	// catalogFilter is the compiled catalogue filter; nil keeps everything, and
+	// every filtering path checks for nil first so it costs nothing when unset.
+	catalogFilter *filter.Set
 }
 
 // NewServer initializes a new server configuration with all necessary components.
@@ -109,6 +114,14 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 			return nil, utils.PrintErrorAndReturn(err)
 		}
 		utils.InfoLog("Successfully parsed M3U playlist from %s", config.RemoteURL.String())
+	}
+
+	catalogFilter, err := filter.NewSet(config.CatalogFilter)
+	if err != nil {
+		return nil, utils.PrintErrorAndReturn(err)
+	}
+	if catalogFilter.Active() {
+		utils.InfoLog("Catalogue filter enabled (rules %s)", catalogFilter.Fingerprint())
 	}
 
 	// Use custom ID for endpoint if provided, otherwise use a generated one
@@ -135,6 +148,7 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		db:                   nil,
 		discordBot:           nil,
 		startTime:            time.Now(),
+		catalogFilter:        catalogFilter,
 	}
 
 	// Provider health check: report-only. Reconnecting the VPN on a bad result is

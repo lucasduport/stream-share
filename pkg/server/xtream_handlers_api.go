@@ -351,10 +351,15 @@ func (c *Config) servePlayerAPICatalog(ctx *gin.Context, action, key string, q u
 	body, err := e.renderedJSON(func(data interface{}) ([]byte, error) {
 		processed := xtreamapi.ProcessResponse(data)
 		if action == "get_live_streams" {
+			// Names come from the full list: /status and logs must still name
+			// a channel the catalogue filter hides from players.
 			c.harvestChannelNames(processed)
-			if c.catchupManager != nil && c.catchupManager.IsEnabled() {
-				processed = c.injectCatchupFlags(processed)
-			}
+		}
+		if c.catalogFilter != nil {
+			processed = c.filterPlayerAPICatalog(action, processed)
+		}
+		if action == "get_live_streams" && c.catchupManager != nil && c.catchupManager.IsEnabled() {
+			processed = c.injectCatchupFlags(processed)
 		}
 		return json.Marshal(processed)
 	})

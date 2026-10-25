@@ -140,6 +140,47 @@ Configuration:
 | `M3U_DEDUP_ENABLED` | `false` | Set to `true` to enable deduplication |
 | `M3U_DEDUP_PREFERRED_LANGS` | `fra` | Comma-separated ordered list of preferred audio languages (e.g. `fra,eng`); among equal-quality duplicates the most preferred language wins |
 
+### Catalogue Filtering
+
+Providers often ship catalogues of tens of thousands of channels and hundreds of thousands of movies and episodes, most of them in languages nobody on your server watches. Every player then downloads and indexes all of it. The catalogue filter keeps only what you want, on the server, so players only ever receive the entries you kept. It is **off by default**: with nothing configured, every answer is passed through unchanged.
+
+Each rule is a [regular expression](https://github.com/google/re2/wiki/Syntax) matched against an entry's **group** (its category: `category_name` in the Xtream API, `group-title` in a playlist) or its **name**. The semantics follow [iptv-proxy](https://github.com/pierre-emmanuelJ/iptv-proxy)'s channel filters:
+
+- `*_GROUP_REGEX`, `*_NAME_REGEX`: keep only what matches.
+- `*_GROUP_EXCLUDE_REGEX`, `*_NAME_EXCLUDE_REGEX`: drop what matches, even if it was kept by the first two.
+- An entry is kept when it passes all of them. Expressions are case sensitive; start one with `(?i)` to ignore case. An invalid expression stops the server at startup, naming the option.
+- **An entry without a group is judged on its name alone**: group patterns never drop it. Many providers leave movies and series uncategorized and carry their language or origin in the name only, so filter those with name patterns.
+
+The four variables exist with four prefixes; a kind-specific set applies on top of the set for every kind:
+
+| Prefix | Applies to |
+|---|---|
+| `FILTER_` | every kind of entry |
+| `FILTER_LIVE_` | live channels |
+| `FILTER_MOVIE_` | movies |
+| `FILTER_SERIES_` | series |
+
+Plus `FILTER_EXCLUDE_ADULT=true`, which drops entries the provider flags as adult (Xtream `is_adult`).
+
+Example (an illustration; adapt the expressions to how your provider names things): keep French and English content, wherever the language marker is written as a `XX| ` prefix, and drop adult content:
+
+```yaml
+environment:
+  FILTER_GROUP_REGEX: '^(FR|EN|US|UK)\| '
+  FILTER_NAME_REGEX: '^(FR|EN|US|UK)\| '
+  FILTER_GROUP_EXCLUDE_REGEX: '(?i)adult|xxx'
+  FILTER_EXCLUDE_ADULT: "true"
+```
+
+The filter applies to everything players get:
+
+- the Xtream API lists (`get_live_streams`, `get_vod_streams`, `get_series`) and their categories. A category that no longer holds any kept entry is dropped too, once that list has been fetched;
+- the `get.php` playlist, track by track (a dropped track loses all its lines: `#EXTINF`, `#EXTGRP`, `#EXTVLCOPT`...). With deduplication on, filtering happens first;
+- the guide (`xmltv.php`), when live rules are set: only the kept channels and their programmes. Until the live list has been fetched once, the full guide is served;
+- live streams: a channel the filter drops answers 404, even asked by its id. Ids the cached live list does not know are let through.
+
+What it does not apply to: the Discord `/watch` search (an admin tool that keeps searching the whole catalogue), movie and series streams by id (their lists can be too large, or empty on some providers, to check every request against), and `get.php` tracks whose type cannot be told from their address (only the rules for every kind apply to them).
+
 ### Xtream Codes API Compatibility
 
 StreamShare fully supports the Xtream Codes API with enhanced error handling and response sanitization:

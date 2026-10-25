@@ -95,7 +95,7 @@ http://provider.example.com/movie/xtreamuser/xtreampass/67890.mp4
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "out.m3u")
 
-	tracks, written, err := streamRewriteM3U(resp, dest, "xtreamuser", "xtreampass", "localuser", "localpass", false, nil)
+	tracks, written, err := streamRewriteM3U(resp, dest, "xtreamuser", "xtreampass", "localuser", "localpass", false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestStreamRewriteM3UEmpty(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "empty.m3u")
 
-	tracks, written, err := streamRewriteM3U(resp, dest, "u", "p", "lu", "lp", false, nil)
+	tracks, written, err := streamRewriteM3U(resp, dest, "u", "p", "lu", "lp", false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

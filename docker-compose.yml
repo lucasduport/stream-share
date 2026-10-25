@@ -12,6 +12,14 @@ services:
       M3U_DEDUP_ENABLED: "false"          # Remove redundant tracks (duplicate stream IDs, same-title language/quality copies) from the generated M3U
       M3U_DEDUP_PREFERRED_LANGS: "fra"    # Comma-separated ordered list of preferred audio languages for dedup (e.g. "fra,eng")
 
+      # Catalogue filter (all empty = off). RE2 expressions on an entry's group (category) and name; see README "Catalogue Filtering".
+      # Same four variables with the FILTER_LIVE_, FILTER_MOVIE_ and FILTER_SERIES_ prefixes for one kind only.
+      FILTER_GROUP_REGEX: ""              # Keep only entries whose group matches (entries without a group are judged on their name)
+      FILTER_NAME_REGEX: ""               # Keep only entries whose name matches
+      FILTER_GROUP_EXCLUDE_REGEX: ""      # Drop entries whose group matches
+      FILTER_NAME_EXCLUDE_REGEX: ""       # Drop entries whose name matches
+      FILTER_EXCLUDE_ADULT: "false"       # Drop entries the provider flags as adult (Xtream is_adult)
+
       # Server Configuration
       PORT: 8080                       # Port to listen on
       ADVERTISED_PORT: 443             # Port to advertise in URLs (for reverse proxy)
