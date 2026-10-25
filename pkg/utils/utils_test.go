@@ -72,6 +72,15 @@ func TestMaskURL_standard(t *testing.T) {
 	}
 }
 
+func TestMaskURL_queryCredentials(t *testing.T) {
+	url := "http://host/get.php?username=alice123&password=secret123&type=m3u_plus&output=m3u8"
+	got := MaskURL(url)
+	want := "http://host/get.php?username=***&password=***&type=m3u_plus&output=m3u8"
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
 func TestMaskURL_short(t *testing.T) {
 	// URLs with fewer than 7 segments are returned unchanged
 	short := "http://host/only"
