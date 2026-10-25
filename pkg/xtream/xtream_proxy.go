@@ -20,7 +20,6 @@ package xtream
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -199,42 +198,6 @@ func (c *Client) Action(cfg *config.ProxyConfig, action string, q url.Values) (r
 		return fallbackForAction(action), http.StatusOK, contentType, err
 	}
 	return result, http.StatusOK, contentType, nil
-}
-
-// GetXMLTV retrieves the EPG data in XMLTV format
-func (c *Client) GetXMLTV() ([]byte, error) {
-	u, err := url.Parse(strings.TrimRight(c.BaseURL, "/") + "/xmltv.php")
-	if err != nil {
-		return nil, utils.PrintErrorAndReturn(err)
-	}
-	params := url.Values{}
-	params.Set("username", c.Username)
-	params.Set("password", c.Password)
-	u.RawQuery = params.Encode()
-	utils.DebugLog("XMLTV request: %s", u.String())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-	if err != nil {
-		return nil, utils.PrintErrorAndReturn(err)
-	}
-	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
-	req.Header.Set("Accept", "application/xml, text/xml")
-	resp, err := c.Client.Do(req)
-	if err != nil {
-		return nil, utils.PrintErrorAndReturn(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, utils.PrintErrorAndReturn(fmt.Errorf("unexpected status code: %d", resp.StatusCode))
-	}
-	limitedReader := &io.LimitedReader{R: resp.Body, N: 100 * 1024 * 1024}
-	xmlData, err := io.ReadAll(limitedReader)
-	if err != nil {
-		return nil, utils.PrintErrorAndReturn(fmt.Errorf("failed to read XMLTV data: %w", err))
-	}
-	return xmlData, nil
 }
 
 func createEmergencyCategoryData() []map[string]interface{} {

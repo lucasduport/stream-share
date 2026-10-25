@@ -34,7 +34,6 @@ import (
 	"github.com/lucasduport/stream-share/pkg/catchup"
 	"github.com/lucasduport/stream-share/pkg/types"
 	"github.com/lucasduport/stream-share/pkg/utils"
-	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
 )
 
 func (c *Config) xtreamApiGet(ctx *gin.Context) {
@@ -85,20 +84,6 @@ func (c *Config) xtreamStream(ctx *gin.Context, oriURL *url.URL) {
 	utils.DebugLog("-> Xtream streaming request: %s", ctx.Request.URL.Path)
 	utils.DebugLog("-> Proxying to Xtream upstream: %s", oriURL.String())
 	c.multiplexedStream(ctx, oriURL)
-}
-
-func (c *Config) xtreamXMLTV(ctx *gin.Context) {
-	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
-	if err != nil {
-		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
-		return
-	}
-	resp, err := client.GetXMLTV()
-	if err != nil {
-		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
-		return
-	}
-	ctx.Data(http.StatusOK, "application/xml", resp)
 }
 
 func (c *Config) xtreamStreamHandler(ctx *gin.Context) {

@@ -388,6 +388,8 @@ func (c *Config) Serve() error {
 	// titles available by the time the first VOD is requested.
 	if c.XtreamBaseURL != "" {
 		_, _ = c.ensureVODM3UCache()
+		// Same for the XMLTV guide, which players fetch right after login.
+		c.ensureEPGCache()
 	}
 
 	// Start background goroutine to keep apiChannelIndex fresh.
