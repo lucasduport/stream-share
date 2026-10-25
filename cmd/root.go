@@ -79,8 +79,8 @@ It supports:
 				xtreamUser = username
 				xtreamPassword = password
 				xtreamBaseURL = fmt.Sprintf("%s://%s", remoteHostURL.Scheme, remoteHostURL.Host)
-				log.Printf("[stream-share] INFO: Xtream service enabled with base URL: %q, username: %q, password: %q",
-					xtreamBaseURL, xtreamUser, xtreamPassword)
+				log.Printf("[stream-share] INFO: Xtream service enabled with base URL: %q, username: %q",
+					xtreamBaseURL, xtreamUser)
 			}
 		}
 
