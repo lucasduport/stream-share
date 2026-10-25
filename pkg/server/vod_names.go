@@ -209,7 +209,9 @@ func (c *Config) resolveTitleAtStart(streamID, streamType string) (string, bool)
 		title = strings.TrimSpace(c.findVODTitleInCache("series", streamID))
 	}
 
-	titleResolvedStore(streamID, title)
+	if title != "" || vodM3UCached() {
+		titleResolvedStore(streamID, title)
+	}
 	if title == "" {
 		return "", false
 	}

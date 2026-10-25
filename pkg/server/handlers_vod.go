@@ -128,13 +128,9 @@ func (c *Config) enrichVODPage(ctx *gin.Context) {
 		end = total
 	}
 
-	// Build an index of movie streamID -> extension from the cached VOD M3U once
-	extIndex := map[string]string{}
-	if m3uPath, err := c.ensureVODM3UCache(); err == nil {
-		if idx, err2 := parseVODM3UExtensions(m3uPath); err2 == nil {
-			extIndex = idx
-		}
-	}
+	// Extensions come from the cached VOD M3U's stream index (built once per
+	// file, O(1) per lookup). Without a cached file yet, probes use defaults.
+	m3uPath, _ := c.ensureVODM3UCache()
 	// Shared HTTP client with per-request timeout
 	client := &http.Client{Timeout: 2500 * time.Millisecond, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -190,7 +186,7 @@ func (c *Config) enrichVODPage(ctx *gin.Context) {
 					basePath = "series"
 				}
 				finalID := streamID
-				if ext := extIndex[streamID]; ext != "" {
+				if ext, _, _ := lookupStreamIndex(m3uPath, basePath, streamID); m3uPath != "" && ext != "" {
 					finalID += ext
 				} else if path.Ext(finalID) == "" {
 					if basePath == "series" {
@@ -441,6 +437,11 @@ func (c *Config) startCache(ctx *gin.Context) {
 
 	// Spawn background download — explicit request, runs until completion regardless of viewer.
 	go func() {
+		// Off the request path, so a cold catalogue is worth waiting for: it
+		// gives the real extension instead of a guessed default.
+		if _, err := c.waitVODM3UCache(); err != nil {
+			utils.DebugLog("Cache: VOD M3U unavailable for %s, using defaults: %v", req.StreamID, err)
+		}
 		upstream, filename := c.resolveVODCacheTarget(basePath, req.StreamID)
 		if c.db != nil {
 			_ = c.db.SetVODCachePath(req.StreamID, filename)
