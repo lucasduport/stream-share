@@ -409,7 +409,7 @@ Cache movies or episodes to disk for faster start times and to reduce upstream u
 - Cached items automatically serve for both downloads and VOD/series streaming endpoints when available.
 
 Configuration:
-- `CACHE_FOLDER` — Absolute path to the root cache directory. stream-share creates purpose-specific subfolders underneath it: `<CACHE_FOLDER>/vod` for cached VOD media and `<CACHE_FOLDER>/catchup` for live catchup buffers. Defaults to `$TMPDIR/stream-share` when unset.
+- `CACHE_FOLDER` — Absolute path to the root cache directory. stream-share creates purpose-specific subfolders underneath it: `<CACHE_FOLDER>/vod` for cached VOD media, `<CACHE_FOLDER>/catchup` for live catchup buffers and `<CACHE_FOLDER>/epg` for the cached XMLTV guide (`xmltv.php` is downloaded once from the provider at startup, served from disk to every player, refreshed in the background after `M3U_CACHE_EXPIRATION_HOURS`, and the last good guide keeps being served if the provider fails). Defaults to `$TMPDIR/stream-share` when unset.
 - `INTERNAL_API_KEY` — API key used by the internal API (Discord bot and tools).
 
 ---

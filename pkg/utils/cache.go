@@ -34,6 +34,7 @@ const (
 	vodSubdir        = "vod"
 	catchupSubdir    = "catchup"
 	slateSubdir      = "slate"
+	epgSubdir        = "epg"
 )
 
 // CacheRoot returns the root cache directory: CACHE_FOLDER when set, otherwise a
@@ -53,6 +54,11 @@ func VODCacheDir() string {
 // CatchupBufferDir returns the subdirectory holding live catchup buffer files.
 func CatchupBufferDir() string {
 	return filepath.Join(CacheRoot(), catchupSubdir)
+}
+
+// EPGCacheDir returns the subdirectory holding the cached XMLTV guide.
+func EPGCacheDir() string {
+	return filepath.Join(CacheRoot(), epgSubdir)
 }
 
 // SlateCacheDir returns the subdirectory holding generated error-slate clips.
