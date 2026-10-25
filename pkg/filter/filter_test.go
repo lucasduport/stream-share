@@ -164,3 +164,42 @@ func TestKindFromPath(t *testing.T) {
 		}
 	}
 }
+
+func TestAnyMatchesGroupOrName(t *testing.T) {
+	r, err := New("filter", Patterns{Any: `^\|?(FR|EN)(\||\s)`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		group, name string
+		want        bool
+	}{
+		{"", "FR - Amélie", true},              // language in the title
+		{"|FR| COMÉDIE/DRAME", "Amélie", true}, // language in the group only
+		{"|TR| DIZI", "Yesilcam", false},       // neither
+		{"", "Untagged title", false},          // no group, untagged name
+		{"FOR ADULTS", "EN - Something", true}, // any is not an exclude
+	}
+	for _, tc := range cases {
+		if got := r.Keep(tc.group, tc.name); got != tc.want {
+			t.Errorf("Keep(%q, %q) = %v, want %v", tc.group, tc.name, got, tc.want)
+		}
+	}
+	if _, err := New("filter-movie", Patterns{Any: "("}); err == nil || !strings.Contains(err.Error(), "filter-movie-any-regex") {
+		t.Fatalf("invalid any regex error should name the option, got %v", err)
+	}
+}
+
+func TestPlaylistKindDefaultsToLive(t *testing.T) {
+	for in, want := range map[string]Kind{
+		"http://h/movie/u/p/1.mkv":   Movie,
+		"http://h/series/u/p/2.mp4":  Series,
+		"http://h/live/u/p/3.ts":     Live,
+		"http://h/u/p/4":             Live,
+		"http://radio.example/s.mp3": Live,
+	} {
+		if got := PlaylistKind(in); got != want {
+			t.Errorf("PlaylistKind(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

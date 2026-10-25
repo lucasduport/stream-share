@@ -217,6 +217,7 @@ func filterPatterns(prefix string) filter.Patterns {
 		Name:         viper.GetString(prefix + "-name-regex"),
 		GroupExclude: viper.GetString(prefix + "-group-exclude-regex"),
 		NameExclude:  viper.GetString(prefix + "-name-exclude-regex"),
+		Any:          viper.GetString(prefix + "-any-regex"),
 	}
 }
 
@@ -260,6 +261,7 @@ func init() {
 		rootCmd.Flags().String(prefix+"-name-regex", "", "Catalogue filter: keep only "+what+" whose name matches this regular expression")
 		rootCmd.Flags().String(prefix+"-group-exclude-regex", "", "Catalogue filter: drop "+what+" whose group (category) matches this regular expression")
 		rootCmd.Flags().String(prefix+"-name-exclude-regex", "", "Catalogue filter: drop "+what+" whose name matches this regular expression")
+		rootCmd.Flags().String(prefix+"-any-regex", "", "Catalogue filter: keep only "+what+" whose group or name matches this regular expression")
 	}
 	rootCmd.Flags().Bool("filter-exclude-adult", false, "Catalogue filter: drop entries the provider flags as adult (Xtream is_adult)")
 

@@ -156,7 +156,7 @@ func rewriteM3UToFile(body io.Reader, filePath, xtreamUser, xtreamPassword, loca
 					group = extractM3UAttr(extinf, "group-title")
 				}
 				if filtering {
-					keep = rules.Keep(filter.KindFromPath(trimmed), group, extinfName(extinf), false)
+					keep = rules.Keep(filter.PlaylistKind(trimmed), group, extinfName(extinf), false)
 				}
 				if !keep && !collect {
 					pending, extinf = pending[:0], ""

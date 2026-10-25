@@ -72,12 +72,17 @@ type Patterns struct {
 	// GroupExclude and NameExclude drop what they match, even when it was
 	// kept above.
 	GroupExclude, NameExclude string
+	// Any keeps what it matches in either the group or the name, for
+	// catalogues that mark an attribute (e.g. a language) in one or the other
+	// depending on the entry.
+	Any string
 }
 
 // Rules are compiled Patterns. A nil *Rules keeps everything.
 type Rules struct {
 	group, name               *regexp.Regexp
 	groupExclude, nameExclude *regexp.Regexp
+	any                       *regexp.Regexp
 	desc                      string
 }
 
@@ -94,6 +99,7 @@ func New(option string, p Patterns) (*Rules, error) {
 		{"name-regex", p.Name, &r.name},
 		{"group-exclude-regex", p.GroupExclude, &r.groupExclude},
 		{"name-exclude-regex", p.NameExclude, &r.nameExclude},
+		{"any-regex", p.Any, &r.any},
 	} {
 		if f.pattern == "" {
 			continue
@@ -104,10 +110,10 @@ func New(option string, p Patterns) (*Rules, error) {
 		}
 		*f.into = re
 	}
-	if r.group == nil && r.name == nil && r.groupExclude == nil && r.nameExclude == nil {
+	if r.group == nil && r.name == nil && r.groupExclude == nil && r.nameExclude == nil && r.any == nil {
 		return nil, nil
 	}
-	r.desc = strings.Join([]string{p.Group, p.Name, p.GroupExclude, p.NameExclude}, "\x00")
+	r.desc = strings.Join([]string{p.Group, p.Name, p.GroupExclude, p.NameExclude, p.Any}, "\x00")
 	return r, nil
 }
 
@@ -115,10 +121,14 @@ func New(option string, p Patterns) (*Rules, error) {
 //
 // A group include pattern only applies to entries that have a group: an
 // uncategorized entry is judged on its name alone. A group exclude pattern
-// likewise only matches a non-empty group. Name patterns always apply.
+// likewise only matches a non-empty group. Name patterns always apply. The any
+// pattern must match the group or the name.
 func (r *Rules) Keep(group, name string) bool {
 	if r == nil {
 		return true
+	}
+	if r.any != nil && !r.any.MatchString(name) && (group == "" || !r.any.MatchString(group)) {
+		return false
 	}
 	if group != "" {
 		if r.group != nil && !r.group.MatchString(group) {
@@ -257,8 +267,8 @@ func (s *Set) Fingerprint() string {
 }
 
 // KindFromPath tells the kind of a stream from its Xtream URL path
-// ("/movie/u/p/1.mkv" is a movie, "/series/..." a series, "/live/..." or a
-// bare "/u/p/1.ts" live). Unknown for anything else.
+// ("/movie/u/p/1.mkv" is a movie, "/series/..." a series, "/live/..." live).
+// Unknown for anything else.
 func KindFromPath(p string) Kind {
 	switch {
 	case strings.Contains(p, "/movie/"):
@@ -269,4 +279,14 @@ func KindFromPath(p string) Kind {
 		return Live
 	}
 	return Unknown
+}
+
+// PlaylistKind is KindFromPath for a playlist track: an entry that is not a
+// movie or a series is a live channel (bare /u/p/id URLs, radio streams,
+// direct links), so the live rules apply to it.
+func PlaylistKind(p string) Kind {
+	if k := KindFromPath(p); k != Unknown {
+		return k
+	}
+	return Live
 }
