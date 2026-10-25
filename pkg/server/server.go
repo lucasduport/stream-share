@@ -1022,14 +1022,14 @@ func (c *Config) refreshAPIChannelIndex() {
 	if c.XtreamBaseURL == "" {
 		return
 	}
-	// Invalidate the cached entry so this refresh actually hits the provider.
-	invalidateCatalogCacheKey("live_streams:" + c.XtreamBaseURL + ":" + c.XtreamUser.String())
-	resp, err := c.getCachedLiveStreamsCatalog()
-	if err != nil {
+	// Force a provider round-trip; on failure the cache keeps (and players
+	// keep getting) the last good catalogue.
+	e, stale, err := fetchCatalogEntry(c.catalogKey("get_live_streams", ""), true, c.catalogFetcher("get_live_streams", nil))
+	if err != nil || stale {
 		utils.WarnLog("stream_names refresh: get_live_streams failed: %v", err)
 		return
 	}
-	if n := c.harvestChannelNames(xtreamapi.ProcessResponse(resp)); n > 0 {
+	if n := c.harvestChannelNames(xtreamapi.ProcessResponse(e.data)); n > 0 {
 		utils.DebugLog("stream_names: refreshed %d live channel names from upstream", n)
 	}
 }

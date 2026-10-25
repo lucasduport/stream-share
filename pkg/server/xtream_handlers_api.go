@@ -21,6 +21,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -182,6 +183,11 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 		return
 	}
 
+	if key, ok := c.playerAPICatalogKey(action, q); ok {
+		c.servePlayerAPICatalog(ctx, action, key, q)
+		return
+	}
+
 	client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, ctx.Request.UserAgent())
 	if err != nil {
 		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
@@ -214,15 +220,6 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 			c.harvestSeriesEpisodeTitles("", info)
 		}
 	}
-	if action == "get_live_streams" {
-		// Store the raw parsed catalog in the shared cache so the startup
-		// warm-up and the periodic refresher reuse this fetch.
-		storeCachedCatalog("live_streams:"+c.XtreamBaseURL+":"+c.XtreamUser.String(), resp)
-		c.harvestChannelNames(processedResp)
-		if c.catchupManager != nil && c.catchupManager.IsEnabled() {
-			processedResp = c.injectCatchupFlags(processedResp)
-		}
-	}
 
 	if config.CacheFolder != "" && utils.IsDebugLogEnabled() {
 		readableJSON, _ := json.Marshal(processedResp)
@@ -231,6 +228,146 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 	}
 
 	ctx.JSON(http.StatusOK, processedResp)
+}
+
+// playerAPICatalogPrefixes maps the catalogue list actions served from the
+// shared catalog cache to their cache-key prefix. The stream lists share their
+// keys with the /watch search and the channel-name warm-up, so players and
+// searches reuse a single provider download.
+var playerAPICatalogPrefixes = map[string]string{
+	"get_live_streams":      "live_streams",
+	"get_vod_streams":       "vod_streams",
+	"get_series":            "series",
+	"get_live_categories":   "live_categories",
+	"get_vod_categories":    "vod_categories",
+	"get_series_categories": "series_categories",
+}
+
+// catalogKey is the catalog-cache key of action for this provider account,
+// with an optional category_id narrowing the list.
+func (c *Config) catalogKey(action, categoryID string) string {
+	key := playerAPICatalogPrefixes[action] + ":" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
+	if categoryID != "" {
+		key += ":category_id=" + categoryID
+	}
+	return key
+}
+
+// playerAPICatalogKey reports whether a player_api request can be served from
+// the catalog cache, and under which key. Only the catalogue list actions
+// qualify, with no parameter other than category_id: anything else is passed
+// through uncached rather than letting arbitrary query strings grow the cache.
+func (c *Config) playerAPICatalogKey(action string, q url.Values) (string, bool) {
+	if _, ok := playerAPICatalogPrefixes[action]; !ok {
+		return "", false
+	}
+	categoryID := ""
+	for k, vs := range q {
+		switch k {
+		case "username", "password", "action":
+		case "category_id":
+			if len(vs) > 1 {
+				return "", false
+			}
+			categoryID = strings.TrimSpace(vs[0])
+		default:
+			return "", false
+		}
+	}
+	return c.catalogKey(action, categoryID), true
+}
+
+// catalogFetcher returns a fetch function for the catalog cache that runs
+// action against the provider. A transport failure, or a body the provider
+// sent but that is empty or unusable, comes back as a *catalogResultError so
+// it is never cached and a previous good answer can be served instead.
+func (c *Config) catalogFetcher(action string, q url.Values) func() (interface{}, error) {
+	return func() (interface{}, error) {
+		client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, "")
+		if err != nil {
+			return nil, err
+		}
+		resp, httpcode, contentType, err := client.Action(c.ProxyConfig, action, q)
+		if err != nil {
+			return nil, &catalogResultError{data: resp, code: httpcode,
+				err: fmt.Errorf("%s failed (HTTP %d, CT=%s): %w", action, httpcode, contentType, err)}
+		}
+		if q.Get("category_id") == "" && !usableCatalog(resp) {
+			// A whole-catalogue list never legitimately comes back empty;
+			// that, or the client's emergency category stub, means the
+			// provider sent nothing usable.
+			return nil, &catalogResultError{data: resp, code: httpcode}
+		}
+		return resp, nil
+	}
+}
+
+// usableCatalog reports whether a decoded provider list holds real entries:
+// not empty and not the emergency fallback the Xtream client substitutes for
+// an unusable category answer.
+func usableCatalog(resp interface{}) bool {
+	switch v := resp.(type) {
+	case []interface{}:
+		return len(v) > 0
+	case []map[string]interface{}:
+		return false // xtream client's emergency category data
+	case nil:
+		return false
+	default:
+		return true
+	}
+}
+
+// servePlayerAPICatalog answers a catalogue list action from the catalog
+// cache: fresh when possible, otherwise the provider's last good answer while a
+// background refresh runs. The JSON sent to players is encoded once per cached
+// catalogue, not per request.
+func (c *Config) servePlayerAPICatalog(ctx *gin.Context, action, key string, q url.Values) {
+	utils.InfoLog("Action\t%s requested by %s", action, ctx.ClientIP())
+	e, stale, err := fetchCatalogEntry(key, false, c.catalogFetcher(action, q))
+	if err != nil {
+		var re *catalogResultError
+		if !errors.As(err, &re) {
+			_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(err))
+			return
+		}
+		if re.err != nil {
+			code := re.code
+			if code < 400 {
+				code = http.StatusBadGateway
+			}
+			_ = ctx.AbortWithError(code, utils.PrintErrorAndReturn(re.err))
+			return
+		}
+		// Nothing cached and the provider sent nothing usable: pass on what
+		// it sent (empty list, emergency categories), as before caching.
+		ctx.JSON(http.StatusOK, xtreamapi.ProcessResponse(re.data))
+		return
+	}
+	if stale {
+		utils.DebugLog("Action\t%s served from cached catalogue fetched %s ago", action, time.Since(e.fetchedAt).Round(time.Second))
+	}
+
+	body, err := e.renderedJSON(func(data interface{}) ([]byte, error) {
+		processed := xtreamapi.ProcessResponse(data)
+		if action == "get_live_streams" {
+			c.harvestChannelNames(processed)
+			if c.catchupManager != nil && c.catchupManager.IsEnabled() {
+				processed = c.injectCatchupFlags(processed)
+			}
+		}
+		return json.Marshal(processed)
+	})
+	if err != nil {
+		_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
+		return
+	}
+
+	if config.CacheFolder != "" && utils.IsDebugLogEnabled() {
+		filename := fmt.Sprintf("%s_%s.json", action, time.Now().Format("20060102_150405"))
+		utils.WriteResponseToFile(filename, body, "application/json")
+	}
+	ctx.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }
 
 func (c *Config) xtreamPlayerAPIGET(ctx *gin.Context) {
@@ -289,18 +426,7 @@ func (c *Config) warmChannelNameIndex() {
 // periodic refresher, and the player_api handler so the full live catalog is
 // fetched at most once per TTL window.
 func (c *Config) getCachedLiveStreamsCatalog() (interface{}, error) {
-	key := "live_streams:" + c.XtreamBaseURL + ":" + c.XtreamUser.String()
-	return fetchCatalogOnce(key, func() (interface{}, error) {
-		client, err := xtreamapi.New(c.XtreamUser.String(), c.XtreamPassword.String(), c.XtreamBaseURL, "")
-		if err != nil {
-			return nil, err
-		}
-		resp, httpcode, contentType, err := client.Action(c.ProxyConfig, "get_live_streams", nil)
-		if err != nil {
-			return nil, fmt.Errorf("get_live_streams failed (HTTP %d, CT=%s): %w", httpcode, contentType, err)
-		}
-		return resp, nil
-	})
+	return fetchCatalogOnce(c.catalogKey("get_live_streams", ""), c.catalogFetcher("get_live_streams", nil))
 }
 
 func (c *Config) injectCatchupFlags(resp interface{}) interface{} {
@@ -308,12 +434,21 @@ func (c *Config) injectCatchupFlags(resp interface{}) interface{} {
 	if !ok {
 		return resp
 	}
+	// The list comes from the shared catalog cache, which other goroutines
+	// read concurrently: flag shallow copies, never the cached entries.
+	out := make([]interface{}, len(streams))
 	upstreamCatchup := make(map[string]bool, len(streams))
-	for _, item := range streams {
-		m, ok := item.(map[string]interface{})
+	for i, item := range streams {
+		out[i] = item
+		orig, ok := item.(map[string]interface{})
 		if !ok {
 			continue
 		}
+		m := make(map[string]interface{}, len(orig)+1)
+		for k, v := range orig {
+			m[k] = v
+		}
+		out[i] = m
 		streamID := fmt.Sprintf("%v", m["stream_id"])
 		if v, exists := m["tv_archive"]; exists {
 			switch vv := v.(type) {
@@ -328,7 +463,7 @@ func (c *Config) injectCatchupFlags(resp interface{}) interface{} {
 		m["tv_archive_duration"] = c.catchupManager.AdvertisedHours()
 	}
 	c.catchupManager.SetUpstreamCatchup(upstreamCatchup)
-	return streams
+	return out
 }
 
 func (c *Config) xtreamPlayerAPIPOST(ctx *gin.Context) {
