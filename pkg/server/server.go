@@ -440,11 +440,17 @@ func (c *Config) Serve() error {
 	// request, which drowns the log in noise from the frequently-polled /healthz
 	// and internal API endpoints. Log only failures (>= 400) unless debug logging
 	// is on, in which case fall back to the full access log.
+	// Release mode unless debug logging is on: in debug mode gin prints every
+	// route at startup, and the Xtream stream routes embed the provider's
+	// username and password in their paths. An explicit GIN_MODE still wins.
+	if os.Getenv(gin.EnvGinMode) == "" && !utils.IsDebugLogEnabled() {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	router := gin.New()
 	if utils.IsDebugLogEnabled() {
 		router.Use(gin.Logger())
 	} else {
-		router.Use(quietRequestLogger())
+		router.Use(c.quietRequestLogger())
 	}
 	router.Use(gin.Recovery())
 	router.Use(cors.Default())
@@ -489,7 +495,7 @@ func (c *Config) Serve() error {
 // quietRequestLogger logs only failed HTTP requests (status >= 400), keeping the
 // success flood — health checks, internal API polling — out of the log. Requests
 // it does log go through the project logger at a severity matching their status.
-func quietRequestLogger() gin.HandlerFunc {
+func (c *Config) quietRequestLogger() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		start := time.Now()
 		ctx.Next()
@@ -498,18 +504,47 @@ func quietRequestLogger() gin.HandlerFunc {
 		if status < 400 {
 			return
 		}
-		path := ctx.Request.URL.Path
-		if raw := ctx.Request.URL.RawQuery; raw != "" {
-			path = path + "?" + raw
-		}
 		msg := fmt.Sprintf("[HTTP] %d | %v | %s | %s %q",
-			status, time.Since(start), ctx.ClientIP(), ctx.Request.Method, path)
+			status, time.Since(start), ctx.ClientIP(), ctx.Request.Method, c.redactRequestURI(ctx.Request.URL, ctx.FullPath()))
 		if status >= 500 {
 			utils.ErrorLog("%s", msg)
 		} else {
 			utils.WarnLog("%s", msg)
 		}
 	}
+}
+
+// redactRequestURI renders a request path and query for logging with every
+// credential masked: the username/password query parameters, path segments the
+// matched route declares as :password (stream routes carry a viewer's own
+// credentials as /live/<user>/<pass>/<id>, LDAP ones included), and any segment
+// equal to the proxy's or the provider's username or password. route is the
+// matched route pattern (ctx.FullPath()), empty when nothing matched.
+func (c *Config) redactRequestURI(u *url.URL, route string) string {
+	secrets := map[string]bool{}
+	for _, s := range []string{c.User.String(), c.Password.String(), c.XtreamUser.String(), c.XtreamPassword.String()} {
+		if s != "" {
+			secrets[s] = true
+		}
+	}
+	segs := strings.Split(u.Path, "/")
+	routeSegs := strings.Split(route, "/")
+	for i, seg := range segs {
+		if secrets[seg] || (i < len(routeSegs) && routeSegs[i] == ":password") {
+			segs[i] = "***"
+		}
+	}
+	out := strings.Join(segs, "/")
+	if u.RawQuery == "" {
+		return out
+	}
+	q := u.Query()
+	for _, k := range []string{"username", "password"} {
+		if q.Has(k) {
+			q.Set(k, "***")
+		}
+	}
+	return out + "?" + q.Encode()
 }
 
 // Add direct streaming routes with proxy credentials
