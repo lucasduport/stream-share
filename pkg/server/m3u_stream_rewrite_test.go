@@ -95,12 +95,15 @@ http://provider.example.com/movie/xtreamuser/xtreampass/67890.mp4
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "out.m3u")
 
-	tracks, err := streamRewriteM3U(resp, dest, "xtreamuser", "xtreampass", "localuser", "localpass")
+	tracks, written, err := streamRewriteM3U(resp, dest, "xtreamuser", "xtreampass", "localuser", "localpass", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tracks != 2 {
 		t.Fatalf("tracks = %d, want 2", tracks)
+	}
+	if written != 2 {
+		t.Fatalf("written = %d, want 2", written)
 	}
 
 	data, err := os.ReadFile(dest)
@@ -136,11 +139,14 @@ func TestStreamRewriteM3UEmpty(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "empty.m3u")
 
-	tracks, err := streamRewriteM3U(resp, dest, "u", "p", "lu", "lp")
+	tracks, written, err := streamRewriteM3U(resp, dest, "u", "p", "lu", "lp", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tracks != 0 {
 		t.Fatalf("tracks = %d, want 0", tracks)
+	}
+	if written != 0 {
+		t.Fatalf("written = %d, want 0", written)
 	}
 }

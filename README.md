@@ -97,6 +97,49 @@ streamshare --m3u-url http://provider.com/get.php?username=user&password=pass&ty
 Access your playlist at:  
 `http://streamshare.example.com:8080/iptv.m3u?username=test&password=passwordtest`
 
+### M3U Deduplication
+
+Provider playlists routinely contain redundant entries: the same channel or movie
+listed twice under different categories, or one entry per language / per quality
+for the same VOD title. When enabled (it is **off by default**), StreamShare
+collapses those into a single entry, keeping the best source, before the playlist
+is written to disk.
+
+Two detection layers are applied:
+
+1. **Exact identity** — same Xtream stream type + stream ID (`/movie/<user>/<pass>/12345.mp4`
+   listed twice), or the exact same URL in a plain M3U playlist.
+2. **Title fingerprint** — for Xtream `movie` and `live` entries only, the same
+   normalized title. Normalization ignores case, accents, punctuation, a leading
+   `The`/`Le`/`La`/`Les`, quality tags (`4K`, `1080p`, `HD`, ...), language tags
+   at either end of the title or in brackets (`FR:`, `[VF]`, `VOSTFR`, `ITA`, ...)
+   and `SxxEyy` formatting. The year is kept in the key, bracketed or not, so
+   remakes (`Dune (1984)` vs `Dune 2021`) stay separate.
+
+Safety rules:
+
+- Entries whose title carries an episode marker (`S01E02`) are **never** merged by
+  title, so two episodes of the same series are both kept.
+- `series`, `timeshift` and plain M3U entries are **never** merged by title, only
+  by exact identity.
+- Bracketed text that is not a tag (`(US)`, `(Director's Cut)`) and subtitles
+  (`Mission Impossible - Fallout`) stay part of the title, so they never cause a merge.
+- Among duplicates, the survivor is chosen by score: video quality first
+  (`8K` > `4K`/`UHD` > `1080p` > `720p` > ...), then the preferred language, then
+  richer metadata (logo, EPG id, group-title), then the provider's original order.
+
+In Xtream `get.php` mode the playlist is streamed to a temp file while a ~24-byte
+record is kept per track, then only the surviving tracks are copied into the final
+file in one sequential pass, so a 400+ MB / 1.45M-track catalog is deduplicated
+without loading it into RAM (at the cost of one extra temporary copy on disk).
+
+Configuration:
+
+| Env var | Default | Description |
+|---|---|---|
+| `M3U_DEDUP_ENABLED` | `false` | Set to `true` to enable deduplication |
+| `M3U_DEDUP_PREFERRED_LANGS` | `fra` | Comma-separated ordered list of preferred audio languages (e.g. `fra,eng`); among equal-quality duplicates the most preferred language wins |
+
 ### Xtream Codes API Compatibility
 
 StreamShare fully supports the Xtream Codes API with enhanced error handling and response sanitization:

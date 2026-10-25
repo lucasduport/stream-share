@@ -40,77 +40,208 @@ import (
 // proxy credentials, preserving all other URL structure. Lines that are not
 // http(s) URLs are passed through unchanged.
 //
-// Returns the path of the written cache file and the number of tracks seen.
-func streamRewriteM3U(resp *http.Response, destPath, xtreamUser, xtreamPassword, localUser, localPassword string) (int64, error) {
+// When dedup is enabled, redundant tracks are dropped (see deduplicateTracks).
+// Dropping needs the whole playlist before deciding, so the rewritten body is
+// first written to a temp file while a compact record and byte range is kept
+// per track; a second sequential pass then copies only the surviving ranges.
+// Memory stays at a few dozen bytes per track, never the playlist size.
+//
+// Returns the number of tracks seen and the number written.
+func streamRewriteM3U(resp *http.Response, destPath, xtreamUser, xtreamPassword, localUser, localPassword string, dedup bool, preferredLangs []string) (int64, int64, error) {
 	tmpPath := destPath + ".part"
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return 0, err
-	}
-
-	w := bufio.NewWriterSize(f, 256*1024)
-	r := bufio.NewReaderSize(resp.Body, 256*1024)
-
-	var tracks int64
-	lineNum := 0
-
-	for {
-		line, readErr := r.ReadString('\n')
-		if len(line) > 0 {
-			lineNum++
-			trimmed := strings.TrimRight(line, "\r\n")
-			if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
-				tracks++
-				rewritten := rewriteM3UURLLine(trimmed, xtreamUser, xtreamPassword, localUser, localPassword)
-				if _, werr := w.WriteString(rewritten); werr != nil {
-					_ = f.Close()
-					_ = os.Remove(tmpPath)
-					return tracks, werr
-				}
-				if line[len(line)-1] == '\n' {
-					if _, werr := w.WriteString("\n"); werr != nil {
-						_ = f.Close()
-						_ = os.Remove(tmpPath)
-						return tracks, werr
-					}
-				}
-			} else {
-				if _, werr := w.WriteString(line); werr != nil {
-					_ = f.Close()
-					_ = os.Remove(tmpPath)
-					return tracks, werr
-				}
-			}
+	if !dedup {
+		seen, _, err := rewriteM3UToFile(resp.Body, tmpPath, xtreamUser, xtreamPassword, localUser, localPassword, false, nil)
+		if err != nil {
+			return seen, 0, err
 		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			_ = f.Close()
+		if err := os.Rename(tmpPath, destPath); err != nil {
 			_ = os.Remove(tmpPath)
-			return tracks, readErr
+			return seen, 0, err
 		}
+		return seen, seen, nil
 	}
 
-	if err := w.Flush(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return tracks, err
+	rawPath := destPath + ".raw"
+	defer func() { _ = os.Remove(rawPath) }()
+	seen, spans, err := rewriteM3UToFile(resp.Body, rawPath, xtreamUser, xtreamPassword, localUser, localPassword, true, preferredLangs)
+	if err != nil {
+		return seen, 0, err
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return tracks, err
+
+	recs := make([]dedupRecord, len(spans))
+	for i := range spans {
+		recs[i] = spans[i].rec
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return tracks, err
+	keep := dedupKeep(recs)
+
+	written, err := copyKeptSpans(rawPath, tmpPath, spans, keep)
+	if err != nil {
+		return seen, written, err
 	}
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return tracks, err
+		return seen, written, err
 	}
-	return tracks, nil
+	return seen, written, nil
+}
+
+// trackSpan locates one track in the pass-1 file: the bytes from its first
+// attached line (#EXTINF, #EXTGRP, ...) through its URL line.
+type trackSpan struct {
+	start, end int64
+	rec        dedupRecord
+}
+
+// rewriteM3UToFile streams body into path, rewriting credentials in URL
+// lines, and returns the number of tracks seen. When collect is set it also
+// returns one trackSpan per track for deduplication.
+// On error the file is removed.
+func rewriteM3UToFile(body io.Reader, filePath, xtreamUser, xtreamPassword, localUser, localPassword string, collect bool, preferredLangs []string) (tracks int64, spans []trackSpan, err error) {
+	f, err := os.Create(filePath)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(filePath)
+		}
+	}()
+
+	w := bufio.NewWriterSize(f, 256*1024)
+	r := bufio.NewReaderSize(body, 256*1024)
+
+	var (
+		offset     int64
+		trackStart int64 = -1 // offset of the first line attached to the next URL
+		extinf     string
+	)
+	for {
+		line, readErr := r.ReadString('\n')
+		if len(line) > 0 {
+			trimmed := strings.TrimRight(line, "\r\n")
+			isURL := strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://")
+			if isURL {
+				tracks++
+				line = rewriteM3UURLLine(trimmed, xtreamUser, xtreamPassword, localUser, localPassword) + line[len(trimmed):]
+			}
+			if collect {
+				switch {
+				case isURL:
+					start := trackStart
+					if start < 0 {
+						start = offset
+					}
+					spans = append(spans, trackSpan{
+						start: start,
+						end:   offset + int64(len(line)),
+						rec: newDedupRecord(extinfName(extinf), trimmed,
+							extractM3UAttr(extinf, "group-title"),
+							extractM3UAttr(extinf, "tvg-logo") != "",
+							extractM3UAttr(extinf, "tvg-id") != "",
+							preferredLangs),
+					})
+					trackStart, extinf = -1, ""
+				case strings.HasPrefix(trimmed, "#EXTM3U"):
+					// Playlist header: belongs to no track.
+				case strings.HasPrefix(trimmed, "#"):
+					if trackStart < 0 {
+						trackStart = offset
+					}
+					if strings.HasPrefix(trimmed, "#EXTINF") {
+						extinf = trimmed
+					}
+				}
+			}
+			if _, err = w.WriteString(line); err != nil {
+				return tracks, nil, err
+			}
+			offset += int64(len(line))
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return tracks, nil, readErr
+		}
+	}
+
+	if err = w.Flush(); err != nil {
+		return tracks, nil, err
+	}
+	if err = f.Sync(); err != nil {
+		return tracks, nil, err
+	}
+	if err = f.Close(); err != nil {
+		_ = os.Remove(filePath)
+		return tracks, nil, err
+	}
+	return tracks, spans, nil
+}
+
+// copyKeptSpans copies srcPath to dstPath, dropping the spans not marked in
+// keep. Spans are in increasing offset order, so the source is read once,
+// sequentially; non-track bytes (the #EXTM3U header) are preserved. Returns
+// the number of tracks written; on error dstPath is removed.
+func copyKeptSpans(srcPath, dstPath string, spans []trackSpan, keep []bool) (written int64, err error) {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = src.Close() }()
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if err != nil {
+			_ = dst.Close()
+			_ = os.Remove(dstPath)
+		}
+	}()
+
+	r := bufio.NewReaderSize(src, 256*1024)
+	w := bufio.NewWriterSize(dst, 256*1024)
+	var pos int64
+	// copyTo copies (or skips) bytes up to offset end.
+	copyTo := func(end int64, drop bool) error {
+		n := end - pos
+		if n <= 0 {
+			return nil
+		}
+		pos = end
+		if drop {
+			_, err := r.Discard(int(n))
+			return err
+		}
+		_, err := io.CopyN(w, r, n)
+		return err
+	}
+	for i, s := range spans {
+		if err = copyTo(s.start, false); err != nil {
+			return written, err
+		}
+		if err = copyTo(s.end, !keep[i]); err != nil {
+			return written, err
+		}
+		if keep[i] {
+			written++
+		}
+	}
+	if _, err = io.Copy(w, r); err != nil {
+		return written, err
+	}
+	if err = w.Flush(); err != nil {
+		return written, err
+	}
+	if err = dst.Sync(); err != nil {
+		return written, err
+	}
+	if err = dst.Close(); err != nil {
+		_ = os.Remove(dstPath)
+		return written, err
+	}
+	return written, nil
 }
 
 // rewriteM3UURLLine replaces provider credentials embedded in an M3U URL line
@@ -188,15 +319,19 @@ func (c *Config) fetchAndRewriteXtreamM3U(rawURL, destPath string) (int64, error
 		return 0, err
 	}
 
-	tracks, err := streamRewriteM3U(resp, destPath,
+	seen, written, err := streamRewriteM3U(resp, destPath,
 		c.XtreamUser.String(), c.XtreamPassword.String(),
-		c.User.String(), c.Password.String())
+		c.User.String(), c.Password.String(),
+		c.M3UDedupEnabled, dedupPreferredLanguages(c.M3UDedupPreferredLangs))
 	if err != nil {
-		return tracks, err
+		return seen, err
 	}
-	if tracks == 0 {
-		return tracks, fmt.Errorf("empty playlist returned by Xtream backend")
+	if c.M3UDedupEnabled && written < seen {
+		utils.InfoLog("M3U dedup: %d tracks -> %d kept (%d redundant removed)", seen, written, seen-written)
 	}
-	utils.InfoLog("Streamed and rewrote M3U: %d tracks -> %s", tracks, destPath)
-	return tracks, nil
+	if written == 0 {
+		return written, fmt.Errorf("empty playlist returned by Xtream backend")
+	}
+	utils.InfoLog("Streamed and rewrote M3U: %d tracks -> %s", written, destPath)
+	return written, nil
 }
