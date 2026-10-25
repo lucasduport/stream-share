@@ -773,7 +773,9 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 
 	// Request the stream through the session manager for multiplexing
 	label := c.streamLabel(streamID)
-	buffer, err := c.sessionManager.RequestStream(username, streamID, streamType, streamTitle, targetURL)
+	// clientKey identifies this connection: one user can hold several (e.g.
+	// two devices on the same account), so every later call names its own.
+	buffer, clientKey, err := c.sessionManager.RequestStream(username, streamID, streamType, streamTitle, targetURL)
 	if err != nil {
 		utils.ErrorLog("Multiplex: RequestStream failed for user=%s %s err=%v", username, label, err)
 		ctx.AbortWithStatus(http.StatusInternalServerError)
@@ -784,13 +786,13 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	}
 
 	// Get the data channel and termination signal for this client
-	dataChan, exists := c.sessionManager.GetClientChannel(streamID, username)
+	dataChan, exists := c.sessionManager.GetClientChannel(streamID, clientKey)
 	if !exists {
 		utils.ErrorLog("Failed to get client channel for user=%s, %s", username, label)
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	doneChan, _ := c.sessionManager.GetClientDone(streamID, username)
+	doneChan, _ := c.sessionManager.GetClientDone(streamID, clientKey)
 	clientGone := ctx.Request.Context().Done()
 
 	// Wait until the pump knows whether the upstream actually came up, before we
@@ -809,7 +811,7 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 				if !c.sessionManager.ServesSlateFor(streamID) {
 					utils.WarnLog("Multiplex: upstream failed for %s (user=%s): %s",
 						label, username, startErr.Error())
-					c.sessionManager.RemoveClient(streamID, username)
+					c.sessionManager.RemoveClient(streamID, clientKey)
 					ctx.AbortWithStatus(http.StatusBadGateway)
 					return
 				}
@@ -817,12 +819,12 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 		case <-time.After(upstreamReadyTimeout):
 			utils.WarnLog("Multiplex: upstream did not respond within %s for %s (user=%s)",
 				upstreamReadyTimeout, label, username)
-			c.sessionManager.RemoveClient(streamID, username)
+			c.sessionManager.RemoveClient(streamID, clientKey)
 			ctx.AbortWithStatus(http.StatusGatewayTimeout)
 			return
 		case <-clientGone:
 			utils.DebugLog("Multiplex: client %s left before %s started", username, label)
-			c.sessionManager.RemoveClient(streamID, username)
+			c.sessionManager.RemoveClient(streamID, clientKey)
 			return
 		}
 	}
@@ -863,7 +865,7 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 
 	// Clean up after streaming is done
 	utils.DebugLog("Stream ended for user %s (%s)", username, label)
-	c.sessionManager.RemoveClient(streamID, username)
+	c.sessionManager.RemoveClient(streamID, clientKey)
 }
 
 // playlistInitialization writes a proxified M3U file to disk if a playlist was parsed.

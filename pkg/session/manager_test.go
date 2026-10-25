@@ -380,13 +380,14 @@ func TestRequestStream_userSwitchesChannel(t *testing.T) {
 
 	// Alice starts on channel 1.
 	u1 := mustURL(t, srv1.URL)
-	if _, err := sm.RequestStream("alice", "ch1", "live", "Channel 1", u1); err != nil {
+	if _, _, err := sm.RequestStream("alice", "ch1", "live", "Channel 1", u1); err != nil {
 		t.Fatalf("RequestStream ch1: %v", err)
 	}
 
 	// Alice switches to channel 2.
 	u2 := mustURL(t, srv2.URL)
-	if _, err := sm.RequestStream("alice", "ch2", "live", "Channel 2", u2); err != nil {
+	_, aliceCh2, err := sm.RequestStream("alice", "ch2", "live", "Channel 2", u2)
+	if err != nil {
 		t.Fatalf("RequestStream ch2: %v", err)
 	}
 
@@ -403,7 +404,7 @@ func TestRequestStream_userSwitchesChannel(t *testing.T) {
 		}
 	}
 
-	sm.RemoveClient("ch2", "alice")
+	sm.RemoveClient("ch2", aliceCh2)
 }
 
 // ---- RemoveClient under concurrent access ----
@@ -421,15 +422,16 @@ func TestRemoveClient_concurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		user := fmt.Sprintf("u%d", i)
-		if _, err := sm.RequestStream(user, "concurrent", "live", "C", u); err != nil {
+		_, key, err := sm.RequestStream(user, "concurrent", "live", "C", u)
+		if err != nil {
 			continue
 		}
 		wg.Add(1)
-		go func(u string) {
+		go func(k string) {
 			defer wg.Done()
 			time.Sleep(20 * time.Millisecond)
-			sm.RemoveClient("concurrent", u)
-		}(user)
+			sm.RemoveClient("concurrent", k)
+		}(key)
 	}
 	wg.Wait()
 }

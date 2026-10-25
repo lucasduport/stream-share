@@ -84,7 +84,7 @@ func TestSlateServedOnUpstreamFailure(t *testing.T) {
 	defer srv.Close()
 
 	streamID := "chan-403"
-	buffer, err := sm.RequestStream("viewer", streamID, "live", "Channel", mustURL(t, srv.URL))
+	buffer, viewer, err := sm.RequestStream("viewer", streamID, "live", "Channel", mustURL(t, srv.URL))
 	if err != nil {
 		t.Fatalf("RequestStream: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestSlateServedOnUpstreamFailure(t *testing.T) {
 	var got int64
 	stop := make(chan struct{})
 	done := make(chan struct{})
-	go func() { drain(sm, streamID, "viewer", &got, stop); close(done) }()
+	go func() { drain(sm, streamID, viewer, &got, stop); close(done) }()
 
 	// Give the pump time to render and start pacing the slate out.
 	time.Sleep(700 * time.Millisecond)
@@ -145,7 +145,7 @@ func TestSlateSkippedForVOD(t *testing.T) {
 	defer srv.Close()
 
 	streamID := "movie-403"
-	buffer, err := sm.RequestStream("viewer", streamID, "movie", "A Movie", mustURL(t, srv.URL))
+	buffer, _, err := sm.RequestStream("viewer", streamID, "movie", "A Movie", mustURL(t, srv.URL))
 	if err != nil {
 		t.Fatalf("RequestStream: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSlateDisabledKeepsOldBehaviour(t *testing.T) {
 	defer srv.Close()
 
 	streamID := "chan-nofallback"
-	buffer, err := sm.RequestStream("viewer", streamID, "live", "Channel", mustURL(t, srv.URL))
+	buffer, viewer, err := sm.RequestStream("viewer", streamID, "live", "Channel", mustURL(t, srv.URL))
 	if err != nil {
 		t.Fatalf("RequestStream: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestSlateDisabledKeepsOldBehaviour(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	dropped := false
 	for time.Now().Before(deadline) {
-		if _, ok := sm.GetClientChannel(streamID, "viewer"); !ok {
+		if _, ok := sm.GetClientChannel(streamID, viewer); !ok {
 			dropped = true
 			break
 		}
@@ -241,7 +241,8 @@ func TestSlateResumesWhenUpstreamRecovers(t *testing.T) {
 	defer srv.Close()
 
 	streamID := "chan-recover"
-	if _, err := sm.RequestStream("viewer", streamID, "live", "Channel", mustURL(t, srv.URL)); err != nil {
+	_, viewer, err := sm.RequestStream("viewer", streamID, "live", "Channel", mustURL(t, srv.URL))
+	if err != nil {
 		t.Fatalf("RequestStream: %v", err)
 	}
 
@@ -249,11 +250,11 @@ func TestSlateResumesWhenUpstreamRecovers(t *testing.T) {
 	received := make(chan []byte, 4096)
 	stop := make(chan struct{})
 	go func() {
-		ch, ok := sm.GetClientChannel(streamID, "viewer")
+		ch, ok := sm.GetClientChannel(streamID, viewer)
 		if !ok {
 			return
 		}
-		done, _ := sm.GetClientDone(streamID, "viewer")
+		done, _ := sm.GetClientDone(streamID, viewer)
 		for {
 			select {
 			case data, open := <-ch:

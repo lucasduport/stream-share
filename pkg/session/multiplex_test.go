@@ -75,12 +75,12 @@ func mustURL(t *testing.T, s string) *url.URL {
 // dropped and the byte count would come up short. On done (and stop), drain any
 // already-buffered chunks non-blocking before returning so every delivered byte is
 // counted deterministically.
-func drain(sm *SessionManager, streamID, user string, got *int64, stop <-chan struct{}) {
-	ch, ok := sm.GetClientChannel(streamID, user)
+func drain(sm *SessionManager, streamID, key string, got *int64, stop <-chan struct{}) {
+	ch, ok := sm.GetClientChannel(streamID, key)
 	if !ok {
 		return
 	}
-	done, _ := sm.GetClientDone(streamID, user)
+	done, _ := sm.GetClientDone(streamID, key)
 	drainBuffered := func() {
 		for {
 			select {
@@ -121,13 +121,14 @@ func TestSingleViewerReceivesAll(t *testing.T) {
 	defer sm.Stop()
 
 	streamID := "chan1"
-	if _, err := sm.RequestStream("alice", streamID, "live", "Channel 1", mustURL(t, srv.URL)); err != nil {
+	_, alice, err := sm.RequestStream("alice", streamID, "live", "Channel 1", mustURL(t, srv.URL))
+	if err != nil {
 		t.Fatalf("RequestStream: %v", err)
 	}
 
 	var got int64
 	doneDrain := make(chan struct{})
-	go func() { drain(sm, streamID, "alice", &got, nil); close(doneDrain) }()
+	go func() { drain(sm, streamID, alice, &got, nil); close(doneDrain) }()
 
 	select {
 	case <-doneDrain:
@@ -168,20 +169,22 @@ func TestTwoViewersShareUpstream(t *testing.T) {
 	defer sm.Stop()
 
 	streamID := "chan2"
-	if _, err := sm.RequestStream("alice", streamID, "live", "Channel 2", mustURL(t, srv.URL)); err != nil {
+	_, alice, err := sm.RequestStream("alice", streamID, "live", "Channel 2", mustURL(t, srv.URL))
+	if err != nil {
 		t.Fatalf("RequestStream alice: %v", err)
 	}
 	var gotA, gotB int64
 	doneA := make(chan struct{})
-	go func() { drain(sm, streamID, "alice", &gotA, nil); close(doneA) }()
+	go func() { drain(sm, streamID, alice, &gotA, nil); close(doneA) }()
 
 	// Second viewer joins shortly after.
 	time.Sleep(10 * time.Millisecond)
-	if _, err := sm.RequestStream("bob", streamID, "live", "Channel 2", mustURL(t, srv.URL)); err != nil {
+	_, bob, err := sm.RequestStream("bob", streamID, "live", "Channel 2", mustURL(t, srv.URL))
+	if err != nil {
 		t.Fatalf("RequestStream bob: %v", err)
 	}
 	doneB := make(chan struct{})
-	go func() { drain(sm, streamID, "bob", &gotB, nil); close(doneB) }()
+	go func() { drain(sm, streamID, bob, &gotB, nil); close(doneB) }()
 
 	for _, d := range []chan struct{}{doneA, doneB} {
 		select {
@@ -218,10 +221,11 @@ func TestSlowClientDroppedProtectsOthers(t *testing.T) {
 	defer sm.Stop()
 
 	streamID := "chan3"
-	if _, err := sm.RequestStream("fast", streamID, "live", "Channel 3", mustURL(t, srv.URL)); err != nil {
+	_, fast, err := sm.RequestStream("fast", streamID, "live", "Channel 3", mustURL(t, srv.URL))
+	if err != nil {
 		t.Fatalf("RequestStream fast: %v", err)
 	}
-	if _, err := sm.RequestStream("slow", streamID, "live", "Channel 3", mustURL(t, srv.URL)); err != nil {
+	if _, _, err := sm.RequestStream("slow", streamID, "live", "Channel 3", mustURL(t, srv.URL)); err != nil {
 		t.Fatalf("RequestStream slow: %v", err)
 	}
 
@@ -230,7 +234,7 @@ func TestSlowClientDroppedProtectsOthers(t *testing.T) {
 	// which fast receives the remainder.
 	var gotFast int64
 	doneFast := make(chan struct{})
-	go func() { drain(sm, streamID, "fast", &gotFast, nil); close(doneFast) }()
+	go func() { drain(sm, streamID, fast, &gotFast, nil); close(doneFast) }()
 
 	select {
 	case <-doneFast:
@@ -261,18 +265,318 @@ func TestConcurrentJoinLeave(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			user := fmt.Sprintf("user%d", n)
-			if _, err := sm.RequestStream(user, streamID, "live", "Channel 4", mustURL(t, srv.URL)); err != nil {
+			_, key, err := sm.RequestStream(user, streamID, "live", "Channel 4", mustURL(t, srv.URL))
+			if err != nil {
 				return
 			}
 			var got int64
 			stop := make(chan struct{})
 			d := make(chan struct{})
-			go func() { drain(sm, streamID, user, &got, stop); close(d) }()
+			go func() { drain(sm, streamID, key, &got, stop); close(d) }()
 			time.Sleep(time.Duration(20+n*10) * time.Millisecond)
-			sm.RemoveClient(streamID, user)
+			sm.RemoveClient(streamID, key)
 			close(stop)
 			<-d
 		}(i)
 	}
 	wg.Wait()
+}
+
+// countingUpstream serves an endless stream of small chunks and counts how many
+// upstream connections were opened, for multi-device tests.
+func countingUpstream(t *testing.T, opens *int64) *httptest.Server {
+	t.Helper()
+	payload := make([]byte, 4096)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(opens, 1)
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		for {
+			if _, err := w.Write(payload); err != nil {
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(2 * time.Millisecond):
+			}
+		}
+	}))
+}
+
+// receiving reports whether the client connection key receives data within d.
+func receiving(sm *SessionManager, streamID, key string, d time.Duration) bool {
+	ch, ok := sm.GetClientChannel(streamID, key)
+	if !ok {
+		return false
+	}
+	done, _ := sm.GetClientDone(streamID, key)
+	deadline := time.After(d)
+	for {
+		select {
+		case data, open := <-ch:
+			if !open {
+				return false
+			}
+			if len(data) > 0 {
+				return true
+			}
+		case <-done:
+			return false
+		case <-deadline:
+			return false
+		}
+	}
+}
+
+// keepDraining reads key's channel until stop closes, so the pump never blocks
+// on it.
+func keepDraining(sm *SessionManager, streamID, key string, stop <-chan struct{}) {
+	var n int64
+	drain(sm, streamID, key, &n, stop)
+}
+
+func streamActive(sm *SessionManager, streamID string) bool {
+	sm.streamLock.RLock()
+	defer sm.streamLock.RUnlock()
+	b, ok := sm.streamBuffers[streamID]
+	return ok && b.active
+}
+
+// TestSameUserTwoDevicesShareStream covers two devices on one account watching
+// the same channel: both receive data over a single upstream connection, one
+// leaving does not cut the other, and the stream stops once both are gone.
+func TestSameUserTwoDevicesShareStream(t *testing.T) {
+	var opens int64
+	srv := countingUpstream(t, &opens)
+	defer srv.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	const streamID = "same-user"
+	_, tv, err := sm.RequestStream("lucas", streamID, "live", "Channel", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("RequestStream tv: %v", err)
+	}
+	_, phone, err := sm.RequestStream("lucas", streamID, "live", "Channel", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("RequestStream phone: %v", err)
+	}
+	if tv == phone {
+		t.Fatalf("both devices got client key %q", tv)
+	}
+
+	if !receiving(sm, streamID, tv, 2*time.Second) || !receiving(sm, streamID, phone, 2*time.Second) {
+		t.Fatal("both devices should receive data")
+	}
+	if o := atomic.LoadInt64(&opens); o != 1 {
+		t.Fatalf("upstream opened %d times, want 1", o)
+	}
+	if info, ok := sm.GetStreamInfo(streamID); !ok || len(info.GetViewers()) != 1 {
+		t.Fatalf("viewers should list lucas once, got %v", info.GetViewers())
+	}
+
+	// The phone leaves: the TV keeps playing on the same upstream.
+	stopTV := make(chan struct{})
+	go keepDraining(sm, streamID, tv, stopTV)
+	sm.RemoveClient(streamID, phone)
+	time.Sleep(50 * time.Millisecond)
+	if !streamActive(sm, streamID) {
+		t.Fatal("stream stopped although the TV is still watching")
+	}
+	if info, ok := sm.GetStreamInfo(streamID); !ok || len(info.GetViewers()) != 1 {
+		t.Fatal("lucas should still be a viewer while one device watches")
+	}
+	close(stopTV)
+	if !receiving(sm, streamID, tv, 2*time.Second) {
+		t.Fatal("TV stopped receiving after the phone left")
+	}
+	if o := atomic.LoadInt64(&opens); o != 1 {
+		t.Fatalf("upstream reopened (%d opens) after one device left", o)
+	}
+
+	// The TV leaves too: nobody is left, the stream stops.
+	sm.RemoveClient(streamID, tv)
+	if streamActive(sm, streamID) {
+		t.Fatal("stream should stop once its last device leaves")
+	}
+	if info, ok := sm.GetStreamInfo(streamID); ok && len(info.GetViewers()) != 0 {
+		t.Fatalf("no viewers should remain, got %v", info.GetViewers())
+	}
+}
+
+// TestSameUserTwoDevicesDifferentChannels covers two devices on one account
+// watching different channels: starting the second must not stop the first.
+func TestSameUserTwoDevicesDifferentChannels(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	_, tv, err := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	if err != nil {
+		t.Fatalf("RequestStream tv: %v", err)
+	}
+	// While the TV is watching ch-a, the phone is the switch-detection
+	// candidate's "previous" stream owner: put a second lucas client on ch-a
+	// first, so ch-a has two clients of the same user when the phone moves on.
+	_, phone, err := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	if err != nil {
+		t.Fatalf("RequestStream phone on ch-a: %v", err)
+	}
+	stopTV := make(chan struct{})
+	defer close(stopTV)
+	go keepDraining(sm, "ch-a", tv, stopTV)
+
+	// The phone zaps to ch-b, opening it before its ch-a connection closes.
+	_, phoneB, err := sm.RequestStream("lucas", "ch-b", "live", "B", mustURL(t, srv2.URL))
+	if err != nil {
+		t.Fatalf("RequestStream phone on ch-b: %v", err)
+	}
+	sm.RemoveClient("ch-a", phone)
+
+	if !streamActive(sm, "ch-a") {
+		t.Fatal("ch-a stopped although the TV still watches it")
+	}
+	if !receiving(sm, "ch-b", phoneB, 2*time.Second) {
+		t.Fatal("phone should receive ch-b")
+	}
+	if !streamActive(sm, "ch-a") || !streamActive(sm, "ch-b") {
+		t.Fatal("both channels should stay up")
+	}
+	sm.RemoveClient("ch-b", phoneB)
+	sm.RemoveClient("ch-a", tv)
+}
+
+// TestSingleDeviceSwitchStopsPrevious keeps the provider-friendly behavior for
+// one device: opening a new channel releases the previous upstream at once,
+// before the old connection's handler has noticed it was left.
+func TestSingleDeviceSwitchStopsPrevious(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	_, onA, err := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	if err != nil {
+		t.Fatalf("RequestStream ch-a: %v", err)
+	}
+	_, onB, err := sm.RequestStream("lucas", "ch-b", "live", "B", mustURL(t, srv2.URL))
+	if err != nil {
+		t.Fatalf("RequestStream ch-b: %v", err)
+	}
+	if streamActive(sm, "ch-a") {
+		t.Fatal("previous channel should be stopped immediately on a single-device switch")
+	}
+	if !receiving(sm, "ch-b", onB, 2*time.Second) {
+		t.Fatal("new channel should play")
+	}
+	// The old handler exits later and releases its own (already gone) client:
+	// this must not disturb the new channel.
+	sm.RemoveClient("ch-a", onA)
+	if !streamActive(sm, "ch-b") {
+		t.Fatal("releasing the old connection stopped the new channel")
+	}
+	sm.RemoveClient("ch-b", onB)
+}
+
+// TestReconnectDoesNotStopStream covers a device reconnecting to the channel it
+// is watching: the new connection joins before the old handler exits, and the
+// old one releasing its client must leave the stream (and new connection) up.
+func TestReconnectDoesNotStopStream(t *testing.T) {
+	var opens int64
+	srv := countingUpstream(t, &opens)
+	defer srv.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	const streamID = "reconnect"
+	_, oldConn, err := sm.RequestStream("lucas", streamID, "live", "C", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("RequestStream old: %v", err)
+	}
+	_, newConn, err := sm.RequestStream("lucas", streamID, "live", "C", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("RequestStream new: %v", err)
+	}
+	sm.RemoveClient(streamID, oldConn)
+
+	if !streamActive(sm, streamID) {
+		t.Fatal("stream stopped when the old connection was released")
+	}
+	if !receiving(sm, streamID, newConn, 2*time.Second) {
+		t.Fatal("new connection should keep receiving")
+	}
+	if o := atomic.LoadInt64(&opens); o != 1 {
+		t.Fatalf("upstream opened %d times, want 1", o)
+	}
+	sm.RemoveClient(streamID, newConn)
+}
+
+// TestDisconnectUserDropsEveryDevice checks the admin disconnect still removes
+// all of a user's connections.
+func TestDisconnectUserDropsEveryDevice(t *testing.T) {
+	var opens int64
+	srv := countingUpstream(t, &opens)
+	defer srv.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	const streamID = "kick"
+	sm.RegisterUser("lucas", "10.0.0.1", "")
+	if _, _, err := sm.RequestStream("lucas", streamID, "live", "C", mustURL(t, srv.URL)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sm.RequestStream("lucas", streamID, "live", "C", mustURL(t, srv.URL)); err != nil {
+		t.Fatal(err)
+	}
+	sm.DisconnectUser("lucas")
+	if streamActive(sm, streamID) {
+		t.Fatal("stream should stop once every device of the user is disconnected")
+	}
+}
+
+// TestSessionExpiryKeepsConnectedViewer checks that an old user session is not
+// reaped while the user is still connected to a live stream.
+func TestSessionExpiryKeepsConnectedViewer(t *testing.T) {
+	var opens int64
+	srv := countingUpstream(t, &opens)
+	defer srv.Close()
+
+	sm := newTestManager()
+	sm.SetSessionTimeout(20 * time.Millisecond)
+	defer sm.Stop()
+
+	const streamID = "long-watch"
+	_, key, err := sm.RequestStream("lucas", streamID, "live", "C", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go keepDraining(sm, streamID, key, stop)
+
+	time.Sleep(50 * time.Millisecond)
+	sm.cleanupExpiredSessions()
+	if !streamActive(sm, streamID) {
+		t.Fatal("expiry sweep stopped a stream the user is still connected to")
+	}
+	if sm.GetUserSession("lucas") == nil {
+		t.Fatal("connected user's session should not be reaped")
+	}
+	sm.RemoveClient(streamID, key)
 }
