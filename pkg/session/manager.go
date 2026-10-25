@@ -390,7 +390,7 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 		if session.LastActive.Before(threshold) {
 			// LastActive only moves on new requests, so a user still connected
 			// to a live stream (one long viewing, no zapping) is not idle.
-			if session.StreamID != "" && sm.userConnected(username, session.StreamID) {
+			if len(sm.userConnections(username)) > 0 {
 				continue
 			}
 			utils.InfoLog("Session expired for user %s (inactive for %s)",
@@ -422,39 +422,24 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 	}
 }
 
-// userConnected reports whether username has a client connection attached to
-// streamID. Takes streamLock (userLock may already be held: lock order is
+// userConnections returns every client connection username holds, across all
+// active streams, as streamID → client keys. A user's devices may be on
+// different streams, so callers must not assume userSession.StreamID is the
+// only one. Takes streamLock (userLock may already be held: lock order is
 // userLock → streamLock).
-func (sm *SessionManager) userConnected(username, streamID string) bool {
+func (sm *SessionManager) userConnections(username string) map[string][]string {
 	sm.streamLock.RLock()
 	defer sm.streamLock.RUnlock()
-	buffer, ok := sm.streamBuffers[streamID]
-	if !ok || !buffer.active {
-		return false
-	}
-	buffer.clientsLock.RLock()
-	defer buffer.clientsLock.RUnlock()
-	return buffer.hasUserClient(username)
-}
-
-// userClientKeys returns the keys of every client connection username holds on
-// streamID.
-func (sm *SessionManager) userClientKeys(username, streamID string) []string {
-	sm.streamLock.RLock()
-	defer sm.streamLock.RUnlock()
-	buffer, ok := sm.streamBuffers[streamID]
-	if !ok {
-		return nil
-	}
-	buffer.clientsLock.RLock()
-	defer buffer.clientsLock.RUnlock()
-	var keys []string
-	for key, cl := range buffer.clients {
-		if cl.user == username {
-			keys = append(keys, key)
+	conns := map[string][]string{}
+	for streamID, buffer := range sm.streamBuffers {
+		if !buffer.active {
+			continue
+		}
+		if keys := buffer.userClientKeys(username); len(keys) > 0 {
+			conns[streamID] = keys
 		}
 	}
-	return keys
+	return conns
 }
 
 // cleanupUnusedStreams stops streams that have no viewers
@@ -537,14 +522,19 @@ func (sm *SessionManager) GetUserSession(username string) *types.UserSession {
 // connections at once (several devices on one account, often behind the same
 // IP); they are independent viewers of the shared upstream.
 //
-// Channel switch: when the user's previous stream is a different channel whose
-// only remaining client is this user's (or that has none left and is waiting
-// out a pause grace), that stream is stopped right away instead of waiting for
+// Channel switch: when the user's previous stream is a different channel that
+// nobody else watches (no other user, no other live device of this user), it
+// is stopped right away instead of waiting for
 // its HTTP handler to notice the client left. Players often open the new
 // channel before closing the old one, and providers commonly allow a single
 // connection, so the old upstream must be released first. A previous stream
-// still watched by another client (another user, or another device of this
-// user) is left alone; it ends with its last client.
+// still watched by someone else is left alone; it ends with its last client.
+//
+// The server cannot tell one device zapping from a second device of the same
+// account (often behind the same IP) opening another channel, so in the latter
+// case the first device's channel is released too: with a one-connection
+// provider both could not play anyway. Several devices of one account on the
+// same channel share it normally.
 func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTitle string,
 	upstreamURL *url.URL) (*StreamBuffer, string, error) {
 
@@ -572,18 +562,23 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 	// Handle case where user switches streams
 	if prevStreamID != "" && prevStreamID != streamID {
 		sm.streamLock.Lock()
-		if prevBuffer, exists := sm.streamBuffers[prevStreamID]; exists && prevBuffer.active {
-			if prevBuffer.onlyClientsOf(username) {
+		prevBuffer, hasBuffer := sm.streamBuffers[prevStreamID]
+		// Leave a previous stream alone while someone else still watches it:
+		// another user, or another device of this user (a second live
+		// connection besides the one switching away). Stalled connections (a
+		// reconnect's half-open socket) don't count.
+		if !hasBuffer || !prevBuffer.active || !prevBuffer.watchedBeyond(username) {
+			if hasBuffer && prevBuffer.active {
 				sm.stopStream(prevStreamID)
-				if prevStream, ok := sm.streamSessions[prevStreamID]; ok {
-					prevStream.RemoveViewer(username)
-				}
-				sm.streamLock.Unlock()
-				// Close the departing viewer's history row for the previous stream.
-				sm.closeLiveHistory(username, prevStreamID)
-			} else {
-				sm.streamLock.Unlock()
 			}
+			// A previous stream without a live buffer (e.g. a VOD view) still
+			// lists this user as a viewer: release that too.
+			if prevStream, ok := sm.streamSessions[prevStreamID]; ok {
+				prevStream.RemoveViewer(username)
+			}
+			sm.streamLock.Unlock()
+			// Close the departing viewer's history row for the previous stream.
+			sm.closeLiveHistory(username, prevStreamID)
 		} else {
 			sm.streamLock.Unlock()
 		}
@@ -616,9 +611,19 @@ func (sm *SessionManager) RequestStream(username, streamID, streamType, streamTi
 		// device of the same user reuses the open row.
 		sm.recordLiveHistory(username, streamID, streamType, joinTitle, userSession.IPAddress, userSession.UserAgent)
 
-		// A reconnecting device does not replace its previous connection here:
-		// that connection's handler releases it with its own key when it exits.
+		// A new connection from this user evicts their connections on this
+		// stream that have stopped reading (a reconnect leaving a half-open
+		// socket behind): kept, such a client would stall the shared pump for
+		// clientStallTimeout. A second device that is actively watching keeps
+		// draining its buffer and is left alone.
 		existingBuffer.clientsLock.Lock()
+		for key, cl := range existingBuffer.clients {
+			if cl.user == username && cl.stalled() {
+				cl.close()
+				delete(existingBuffer.clients, key)
+				utils.DebugLog("User %s reconnected to %s; dropped a stalled connection", username, sm.streamLabel(streamID))
+			}
+		}
 		existingBuffer.clients[client.key] = client
 		existingBuffer.clientsLock.Unlock()
 
@@ -679,38 +684,46 @@ func (sm *SessionManager) newStreamClient(username string) *streamClient {
 	}
 }
 
-// clientKeyUser returns the username a client key (username#N) belongs to.
-func clientKeyUser(key string) string {
-	if i := strings.LastIndexByte(key, '#'); i >= 0 {
-		return key[:i]
-	}
-	return key
+// stalled reports whether the client has stopped reading: its whole jitter
+// buffer is queued up. A live viewer keeps it near empty.
+func (cl *streamClient) stalled() bool {
+	return len(cl.ch) == cap(cl.ch)
 }
 
-// onlyClientsOf reports whether the buffer is down to at most one client and,
-// if there is one, it belongs to username: the state in which username leaving
-// for another channel means nobody is left watching this one.
-func (b *StreamBuffer) onlyClientsOf(username string) bool {
+// userClientKeys returns the keys of username's clients on this buffer.
+func (b *StreamBuffer) userClientKeys(username string) []string {
 	b.clientsLock.RLock()
 	defer b.clientsLock.RUnlock()
-	if len(b.clients) > 1 {
-		return false
-	}
-	for _, cl := range b.clients {
-		return cl.user == username
-	}
-	return true
+	return b.userClientKeysLocked(username)
 }
 
-// hasUserClient reports whether username still has a client attached. The
-// caller must hold clientsLock.
-func (b *StreamBuffer) hasUserClient(username string) bool {
-	for _, cl := range b.clients {
+// userClientKeysLocked is userClientKeys for callers holding clientsLock.
+func (b *StreamBuffer) userClientKeysLocked(username string) []string {
+	var keys []string
+	for key, cl := range b.clients {
 		if cl.user == username {
-			return true
+			keys = append(keys, key)
 		}
 	}
-	return false
+	return keys
+}
+
+// watchedBeyond reports whether this buffer is still watched once username's
+// switching device leaves it: another user has a client, or username has at
+// least two live (non-stalled) connections, i.e. another device of theirs stays.
+func (b *StreamBuffer) watchedBeyond(username string) bool {
+	b.clientsLock.RLock()
+	defer b.clientsLock.RUnlock()
+	live := 0
+	for _, cl := range b.clients {
+		if cl.user != username {
+			return true
+		}
+		if !cl.stalled() {
+			live++
+		}
+	}
+	return live >= 2
 }
 
 // deliver enqueues a chunk for one client, applying back-pressure.
@@ -882,7 +895,7 @@ func (sm *SessionManager) fanOut(buffer *StreamBuffer, chunk []byte) {
 			defer wg.Done()
 			if sm.deliver(buffer, cl, chunk, false) {
 				utils.WarnLog("Dropping slow client %s from %s (buffer stalled)", cl.user, sm.streamLabel(buffer.streamID))
-				sm.RemoveClient(buffer.streamID, cl.key)
+				sm.RemoveClient(buffer.streamID, cl.user, cl.key)
 			}
 		}(targets[i])
 	}
@@ -932,8 +945,8 @@ func (sm *SessionManager) GetClientDone(streamID, clientKey string) (<-chan stru
 	return cl.done, true
 }
 
-// RemoveClient detaches the client connection identified by clientKey (as
-// returned by RequestStream) from a stream. Its user stays a viewer, and keeps
+// RemoveClient detaches username's client connection identified by clientKey
+// (as returned by RequestStream) from a stream. Its user stays a viewer, and keeps
 // their history row, while they still have another connection on the stream
 // (e.g. a second device); the stream stops once its last client is gone.
 //
@@ -945,7 +958,7 @@ func (sm *SessionManager) GetClientDone(streamID, clientKey string) (<-chan stru
 // user starts a genuinely different stream, and converts any pending
 // pause-grace stop on the old stream into an immediate one. Idle sessions are
 // fully reaped by cleanupExpiredSessions/DisconnectUser regardless.
-func (sm *SessionManager) RemoveClient(streamID, clientKey string) {
+func (sm *SessionManager) RemoveClient(streamID, username, clientKey string) {
 	sm.streamLock.Lock()
 
 	// Signal the client's HTTP handler to finish, then detach it.
@@ -956,7 +969,6 @@ func (sm *SessionManager) RemoveClient(streamID, clientKey string) {
 	}
 
 	buffer.clientsLock.Lock()
-	username := clientKeyUser(clientKey)
 	if cl, ok := buffer.clients[clientKey]; ok {
 		cl.close()
 		delete(buffer.clients, clientKey)
@@ -964,7 +976,7 @@ func (sm *SessionManager) RemoveClient(streamID, clientKey string) {
 	// When the client is already gone (the stream stopped, which detaches
 	// every client), the user's viewer entry and history row are still
 	// released below.
-	userStillWatching := buffer.hasUserClient(username)
+	userStillWatching := len(buffer.userClientKeysLocked(username)) > 0
 	remaining := len(buffer.clients)
 	buffer.clientsLock.Unlock()
 
@@ -1146,15 +1158,15 @@ func (sm *SessionManager) DisconnectUser(username string) {
 		return
 	}
 
-	streamID := userSession.StreamID
 	userSession.StreamID = ""
 	userSession.StreamType = ""
 	sm.userLock.Unlock()
 
-	// If user was watching a stream, remove every connection they hold on it
-	if streamID != "" {
-		for _, key := range sm.userClientKeys(username, streamID) {
-			sm.RemoveClient(streamID, key)
+	// Remove every connection the user holds, on every stream: their devices
+	// may be watching different channels.
+	for streamID, keys := range sm.userConnections(username) {
+		for _, key := range keys {
+			sm.RemoveClient(streamID, username, key)
 		}
 	}
 

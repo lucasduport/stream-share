@@ -811,7 +811,7 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 				if !c.sessionManager.ServesSlateFor(streamID) {
 					utils.WarnLog("Multiplex: upstream failed for %s (user=%s): %s",
 						label, username, startErr.Error())
-					c.sessionManager.RemoveClient(streamID, clientKey)
+					c.sessionManager.RemoveClient(streamID, username, clientKey)
 					ctx.AbortWithStatus(http.StatusBadGateway)
 					return
 				}
@@ -819,12 +819,12 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 		case <-time.After(upstreamReadyTimeout):
 			utils.WarnLog("Multiplex: upstream did not respond within %s for %s (user=%s)",
 				upstreamReadyTimeout, label, username)
-			c.sessionManager.RemoveClient(streamID, clientKey)
+			c.sessionManager.RemoveClient(streamID, username, clientKey)
 			ctx.AbortWithStatus(http.StatusGatewayTimeout)
 			return
 		case <-clientGone:
 			utils.DebugLog("Multiplex: client %s left before %s started", username, label)
-			c.sessionManager.RemoveClient(streamID, clientKey)
+			c.sessionManager.RemoveClient(streamID, username, clientKey)
 			return
 		}
 	}
@@ -865,7 +865,7 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 
 	// Clean up after streaming is done
 	utils.DebugLog("Stream ended for user %s (%s)", username, label)
-	c.sessionManager.RemoveClient(streamID, clientKey)
+	c.sessionManager.RemoveClient(streamID, username, clientKey)
 }
 
 // playlistInitialization writes a proxified M3U file to disk if a playlist was parsed.

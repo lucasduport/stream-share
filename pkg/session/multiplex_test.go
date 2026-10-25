@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -274,7 +275,7 @@ func TestConcurrentJoinLeave(t *testing.T) {
 			d := make(chan struct{})
 			go func() { drain(sm, streamID, key, &got, stop); close(d) }()
 			time.Sleep(time.Duration(20+n*10) * time.Millisecond)
-			sm.RemoveClient(streamID, key)
+			removeKey(sm, streamID, key)
 			close(stop)
 			<-d
 		}(i)
@@ -339,6 +340,16 @@ func keepDraining(sm *SessionManager, streamID, key string, stop <-chan struct{}
 	drain(sm, streamID, key, &n, stop)
 }
 
+// removeKey releases a client the way the HTTP handler does. Test keys are
+// always "username#N" (see newStreamClient), so the owner is read off the key.
+func removeKey(sm *SessionManager, streamID, key string) {
+	user := key
+	if i := strings.LastIndexByte(key, '#'); i >= 0 {
+		user = key[:i]
+	}
+	sm.RemoveClient(streamID, user, key)
+}
+
 func streamActive(sm *SessionManager, streamID string) bool {
 	sm.streamLock.RLock()
 	defer sm.streamLock.RUnlock()
@@ -383,7 +394,7 @@ func TestSameUserTwoDevicesShareStream(t *testing.T) {
 	// The phone leaves: the TV keeps playing on the same upstream.
 	stopTV := make(chan struct{})
 	go keepDraining(sm, streamID, tv, stopTV)
-	sm.RemoveClient(streamID, phone)
+	removeKey(sm, streamID, phone)
 	time.Sleep(50 * time.Millisecond)
 	if !streamActive(sm, streamID) {
 		t.Fatal("stream stopped although the TV is still watching")
@@ -400,7 +411,7 @@ func TestSameUserTwoDevicesShareStream(t *testing.T) {
 	}
 
 	// The TV leaves too: nobody is left, the stream stops.
-	sm.RemoveClient(streamID, tv)
+	removeKey(sm, streamID, tv)
 	if streamActive(sm, streamID) {
 		t.Fatal("stream should stop once its last device leaves")
 	}
@@ -442,7 +453,7 @@ func TestSameUserTwoDevicesDifferentChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestStream phone on ch-b: %v", err)
 	}
-	sm.RemoveClient("ch-a", phone)
+	removeKey(sm, "ch-a", phone)
 
 	if !streamActive(sm, "ch-a") {
 		t.Fatal("ch-a stopped although the TV still watches it")
@@ -453,8 +464,8 @@ func TestSameUserTwoDevicesDifferentChannels(t *testing.T) {
 	if !streamActive(sm, "ch-a") || !streamActive(sm, "ch-b") {
 		t.Fatal("both channels should stay up")
 	}
-	sm.RemoveClient("ch-b", phoneB)
-	sm.RemoveClient("ch-a", tv)
+	removeKey(sm, "ch-b", phoneB)
+	removeKey(sm, "ch-a", tv)
 }
 
 // TestSameUserNewChannelReplacesOtherDevicesChannel pins down what happens when
@@ -487,11 +498,11 @@ func TestSameUserNewChannelReplacesOtherDevicesChannel(t *testing.T) {
 	if !receiving(sm, "ch-b", phone, 2*time.Second) {
 		t.Fatal("the new channel should play")
 	}
-	sm.RemoveClient("ch-a", tv)
+	removeKey(sm, "ch-a", tv)
 	if !streamActive(sm, "ch-b") {
 		t.Fatal("the TV's handler exiting must not stop ch-b")
 	}
-	sm.RemoveClient("ch-b", phone)
+	removeKey(sm, "ch-b", phone)
 }
 
 // TestSingleDeviceSwitchStopsPrevious keeps the provider-friendly behavior for
@@ -523,11 +534,11 @@ func TestSingleDeviceSwitchStopsPrevious(t *testing.T) {
 	}
 	// The old handler exits later and releases its own (already gone) client:
 	// this must not disturb the new channel.
-	sm.RemoveClient("ch-a", onA)
+	removeKey(sm, "ch-a", onA)
 	if !streamActive(sm, "ch-b") {
 		t.Fatal("releasing the old connection stopped the new channel")
 	}
-	sm.RemoveClient("ch-b", onB)
+	removeKey(sm, "ch-b", onB)
 }
 
 // TestReconnectDoesNotStopStream covers a device reconnecting to the channel it
@@ -550,7 +561,7 @@ func TestReconnectDoesNotStopStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestStream new: %v", err)
 	}
-	sm.RemoveClient(streamID, oldConn)
+	removeKey(sm, streamID, oldConn)
 
 	if !streamActive(sm, streamID) {
 		t.Fatal("stream stopped when the old connection was released")
@@ -561,7 +572,7 @@ func TestReconnectDoesNotStopStream(t *testing.T) {
 	if o := atomic.LoadInt64(&opens); o != 1 {
 		t.Fatalf("upstream opened %d times, want 1", o)
 	}
-	sm.RemoveClient(streamID, newConn)
+	removeKey(sm, streamID, newConn)
 }
 
 // TestDisconnectUserDropsEveryDevice checks the admin disconnect still removes
@@ -616,5 +627,159 @@ func TestSessionExpiryKeepsConnectedViewer(t *testing.T) {
 	if sm.GetUserSession("lucas") == nil {
 		t.Fatal("connected user's session should not be reaped")
 	}
-	sm.RemoveClient(streamID, key)
+	removeKey(sm, streamID, key)
+}
+
+// TestReconnectEvictsStalledConnection covers a device reconnecting while its
+// old socket is half-open: the stalled connection must be dropped at once so
+// the new one plays without waiting out clientStallTimeout.
+func TestReconnectEvictsStalledConnection(t *testing.T) {
+	var opens int64
+	srv := countingUpstream(t, &opens)
+	defer srv.Close()
+
+	sm := newTestManager()
+	sm.clientStallTimeout = time.Hour // a stall would block the pump for the whole test
+	defer sm.Stop()
+
+	_, old, err := sm.RequestStream("lucas", "ch", "live", "C", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("RequestStream old: %v", err)
+	}
+	// Never read from old: wait until its buffer is full (half-open socket).
+	waitStalled(t, sm, "ch", old)
+
+	_, fresh, err := sm.RequestStream("lucas", "ch", "live", "C", mustURL(t, srv.URL))
+	if err != nil {
+		t.Fatalf("RequestStream fresh: %v", err)
+	}
+	if !receiving(sm, "ch", fresh, 2*time.Second) {
+		t.Fatal("reconnected device should play at once, not wait on the stalled connection")
+	}
+	if _, ok := sm.GetClientChannel("ch", old); ok {
+		t.Fatal("stalled connection should have been evicted")
+	}
+	removeKey(sm, "ch", old)
+	if !streamActive(sm, "ch") {
+		t.Fatal("old handler exiting must not stop the stream")
+	}
+	removeKey(sm, "ch", fresh)
+}
+
+// TestSwitchStopsPreviousDespiteOwnDuplicate covers a zap while the user still
+// holds two connections on the previous channel (e.g. a reconnect whose old
+// socket has not closed yet): only this user watches it, so it is released.
+func TestSwitchStopsPreviousDespiteOwnDuplicate(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	sm.clientStallTimeout = time.Hour // keep the stalled duplicate attached
+	_, a1, _ := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	// a1 never reads: wait for it to stall (the half-open old socket), then
+	// the live connection a2 joins (eviction is bypassed by filling a1 after).
+	stop := make(chan struct{})
+	defer close(stop)
+	_, a2, _ := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	go keepDraining(sm, "ch-a", a2, stop)
+	waitStalled(t, sm, "ch-a", a1)
+	_, b, err := sm.RequestStream("lucas", "ch-b", "live", "B", mustURL(t, srv2.URL))
+	if err != nil {
+		t.Fatalf("RequestStream ch-b: %v", err)
+	}
+	if streamActive(sm, "ch-a") {
+		t.Fatal("ch-a should be released: only this user's connections were on it")
+	}
+	removeKey(sm, "ch-a", a1)
+	removeKey(sm, "ch-a", a2)
+	removeKey(sm, "ch-b", b)
+}
+
+// TestSwitchKeepsPreviousWatchedByOtherUser: another user still on the
+// previous channel keeps it up.
+func TestSwitchKeepsPreviousWatchedByOtherUser(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	_, mine, _ := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	_, theirs, _ := sm.RequestStream("alice", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	stop := make(chan struct{})
+	defer close(stop)
+	go keepDraining(sm, "ch-a", theirs, stop)
+
+	_, b, _ := sm.RequestStream("lucas", "ch-b", "live", "B", mustURL(t, srv2.URL))
+	removeKey(sm, "ch-a", mine)
+	if !streamActive(sm, "ch-a") {
+		t.Fatal("ch-a stopped although alice still watches it")
+	}
+	removeKey(sm, "ch-b", b)
+	removeKey(sm, "ch-a", theirs)
+}
+
+// TestDisconnectUserDropsEveryStream covers devices of one account on two
+// channels kept up by other viewers: a forced disconnect drops both.
+func TestDisconnectUserDropsEveryStream(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+
+	_, aliceA, _ := sm.RequestStream("alice", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	_, lucasA, _ := sm.RequestStream("lucas", "ch-a", "live", "A", mustURL(t, srv1.URL))
+	_, lucasB, _ := sm.RequestStream("lucas", "ch-b", "live", "B", mustURL(t, srv2.URL))
+	stop := make(chan struct{})
+	defer close(stop)
+	go keepDraining(sm, "ch-a", aliceA, stop)
+
+	sm.DisconnectUser("lucas")
+	if _, ok := sm.GetClientChannel("ch-a", lucasA); ok {
+		t.Fatal("lucas's ch-a connection survived DisconnectUser")
+	}
+	if _, ok := sm.GetClientChannel("ch-b", lucasB); ok {
+		t.Fatal("lucas's ch-b connection survived DisconnectUser")
+	}
+	if !streamActive(sm, "ch-a") {
+		t.Fatal("alice's channel should stay up")
+	}
+	removeKey(sm, "ch-a", aliceA)
+}
+
+// waitStalled waits until the client key's jitter buffer is full.
+func waitStalled(t *testing.T, sm *SessionManager, streamID, key string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sm.streamLock.RLock()
+		b := sm.streamBuffers[streamID]
+		sm.streamLock.RUnlock()
+		full := false
+		if b != nil {
+			b.clientsLock.RLock()
+			cl := b.clients[key]
+			full = cl != nil && cl.stalled()
+			b.clientsLock.RUnlock()
+		}
+		if full {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never filled its buffer", key)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

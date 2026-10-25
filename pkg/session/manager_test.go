@@ -404,7 +404,7 @@ func TestRequestStream_userSwitchesChannel(t *testing.T) {
 		}
 	}
 
-	sm.RemoveClient("ch2", aliceCh2)
+	removeKey(sm, "ch2", aliceCh2)
 }
 
 // ---- RemoveClient under concurrent access ----
@@ -430,7 +430,7 @@ func TestRemoveClient_concurrent(t *testing.T) {
 		go func(k string) {
 			defer wg.Done()
 			time.Sleep(20 * time.Millisecond)
-			sm.RemoveClient("concurrent", k)
+			removeKey(sm, "concurrent", k)
 		}(key)
 	}
 	wg.Wait()
