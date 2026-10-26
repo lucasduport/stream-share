@@ -27,6 +27,7 @@ import (
 
 	"github.com/lucasduport/stream-share/pkg/banner"
 	"github.com/lucasduport/stream-share/pkg/config"
+	"github.com/lucasduport/stream-share/pkg/filter"
 	"github.com/lucasduport/stream-share/pkg/server"
 	"github.com/lucasduport/stream-share/pkg/utils"
 	homedir "github.com/mitchellh/go-homedir"
@@ -118,14 +119,21 @@ It supports:
 			M3UCacheExpiration:     viper.GetInt("m3u-cache-expiration-hours"),
 			M3UDedupEnabled:        viper.GetBool("m3u-dedup-enabled"),
 			M3UDedupPreferredLangs: viper.GetString("m3u-dedup-preferred-langs"),
-			User:                   config.CredentialString(viper.GetString("auth-user")),
-			Password:               config.CredentialString(viper.GetString("auth-password")),
-			AdvertisedPort:         advertisedPort,
-			HTTPS:                  httpsEnabled,
-			M3UFileName:            viper.GetString("m3u-file-name"),
-			CustomEndpoint:         viper.GetString("custom-endpoint"),
-			CustomId:               viper.GetString("custom-id"),
-			XtreamGenerateApiGet:   viper.GetBool("xtream-api-get-enabled"),
+			CatalogFilter: filter.Config{
+				All:          filterPatterns("filter"),
+				Live:         filterPatterns("filter-live"),
+				Movie:        filterPatterns("filter-movie"),
+				Series:       filterPatterns("filter-series"),
+				ExcludeAdult: viper.GetBool("filter-exclude-adult"),
+			},
+			User:                 config.CredentialString(viper.GetString("auth-user")),
+			Password:             config.CredentialString(viper.GetString("auth-password")),
+			AdvertisedPort:       advertisedPort,
+			HTTPS:                httpsEnabled,
+			M3UFileName:          viper.GetString("m3u-file-name"),
+			CustomEndpoint:       viper.GetString("custom-endpoint"),
+			CustomId:             viper.GetString("custom-id"),
+			XtreamGenerateApiGet: viper.GetBool("xtream-api-get-enabled"),
 			// LDAP configuration
 			LDAPEnabled:          viper.GetBool("ldap-enabled"),
 			LDAPServer:           viper.GetString("ldap-server"),
@@ -201,6 +209,18 @@ It supports:
 	},
 }
 
+// filterPatterns reads the four regular expressions of one catalogue filter
+// prefix (see the filter-* flags).
+func filterPatterns(prefix string) filter.Patterns {
+	return filter.Patterns{
+		Group:        viper.GetString(prefix + "-group-regex"),
+		Name:         viper.GetString(prefix + "-name-regex"),
+		GroupExclude: viper.GetString(prefix + "-group-exclude-regex"),
+		NameExclude:  viper.GetString(prefix + "-name-exclude-regex"),
+		Any:          viper.GetString(prefix + "-any-regex"),
+	}
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
@@ -227,6 +247,23 @@ func init() {
 	rootCmd.Flags().Int("m3u-cache-expiration-hours", 1, "M3U cache expiration in hours")
 	rootCmd.Flags().Bool("m3u-dedup-enabled", false, "Remove redundant tracks (duplicate stream IDs, same-title movie/live language/quality copies) from the generated M3U")
 	rootCmd.Flags().String("m3u-dedup-preferred-langs", "fra", "Comma-separated ordered list of preferred audio languages for M3U dedup (e.g. \"fra,eng\")")
+
+	// Catalogue filter (all empty = no filtering). Each prefix takes four RE2
+	// expressions: <prefix>-group-regex / -name-regex keep what they match,
+	// -group-exclude-regex / -name-exclude-regex drop what they match.
+	for prefix, what := range map[string]string{
+		"filter":        "entries (any kind)",
+		"filter-live":   "live channels",
+		"filter-movie":  "movies",
+		"filter-series": "series",
+	} {
+		rootCmd.Flags().String(prefix+"-group-regex", "", "Catalogue filter: keep only "+what+" whose group (category) matches this regular expression")
+		rootCmd.Flags().String(prefix+"-name-regex", "", "Catalogue filter: keep only "+what+" whose name matches this regular expression")
+		rootCmd.Flags().String(prefix+"-group-exclude-regex", "", "Catalogue filter: drop "+what+" whose group (category) matches this regular expression")
+		rootCmd.Flags().String(prefix+"-name-exclude-regex", "", "Catalogue filter: drop "+what+" whose name matches this regular expression")
+		rootCmd.Flags().String(prefix+"-any-regex", "", "Catalogue filter: keep only "+what+" whose group or name matches this regular expression")
+	}
+	rootCmd.Flags().Bool("filter-exclude-adult", false, "Catalogue filter: drop entries the provider flags as adult (Xtream is_adult)")
 
 	// Authentication configuration
 	rootCmd.Flags().String("auth-user", "usertest", "Username for basic authentication when LDAP is not enabled")

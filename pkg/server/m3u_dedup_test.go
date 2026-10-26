@@ -240,7 +240,7 @@ http://provider.example.com/series/xtreamuser/xtreampass/5002.mkv
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "out.m3u")
 
-	seen, written, err := streamRewriteM3U(resp, dest, "xtreamuser", "xtreampass", "localuser", "localpass", true, []string{"fra"})
+	seen, written, err := streamRewriteM3U(resp, dest, "xtreamuser", "xtreampass", "localuser", "localpass", true, []string{"fra"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ http://provider.example.com/live/u/p/3.ts
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "out.m3u")
 
-	_, written, err := streamRewriteM3U(resp, dest, "u", "p", "lu", "lp", true, nil)
+	_, written, err := streamRewriteM3U(resp, dest, "u", "p", "lu", "lp", true, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -126,6 +126,23 @@ func getCachedCatalog(key string) (interface{}, bool) {
 	return e.data, true
 }
 
+// peekCatalogEntry returns the cached entry for key, fresh or stale, without
+// fetching; nil when nothing is cached.
+func peekCatalogEntry(key string) *catalogEntry {
+	catalogCacheMu.RLock()
+	defer catalogCacheMu.RUnlock()
+	return catalogCache[key]
+}
+
+// peekCatalog returns the cached data for key, fresh or stale, without
+// fetching.
+func peekCatalog(key string) (interface{}, bool) {
+	if e := peekCatalogEntry(key); e != nil {
+		return e.data, true
+	}
+	return nil, false
+}
+
 // storeCachedCatalog saves a parsed catalog under key.
 func storeCachedCatalog(key string, data interface{}) *catalogEntry {
 	e := &catalogEntry{data: data, fetchedAt: time.Now()}

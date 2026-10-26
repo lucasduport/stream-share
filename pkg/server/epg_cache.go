@@ -90,6 +90,9 @@ func (c *Config) xtreamXMLTV(ctx *gin.Context) {
 		_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(err))
 		return
 	}
+	if c.catalogFilter != nil {
+		p = c.filteredEPGPath(p)
+	}
 	ctx.Header("Content-Type", "application/xml")
 	ctx.File(p)
 }
