@@ -22,6 +22,11 @@ jobs:
         with:
           version: latest
 
+      # ffmpeg/ffprobe drive the end-to-end tests of progressive VOD serving
+      # (real demuxers opening a file while it downloads); they skip without it.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run tests and build
         run: |
           go test -mod vendor -v -race ./...
