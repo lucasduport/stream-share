@@ -20,8 +20,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/lucasduport/stream-share/pkg/config"
+	"github.com/lucasduport/stream-share/pkg/utils"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,7 +76,7 @@ func TestDedupSeriesEpisodesMergesIdenticalCopies(t *testing.T) {
 		epJSON("120", 2, "some show -  S01E02", "mp4", infoJSON(1310, "h264", "yuv420p", 1080, "aac")), // same file, rounding + case
 		epJSON("300", 3, "Some Show - S01E03", "mp4", h264Info),
 	))
-	out, removed := dedupSeriesEpisodes(in, false)
+	out, removed := dedupSeriesEpisodes(in, false, nil)
 	if removed != 1 {
 		t.Fatalf("removed = %d, want 1", removed)
 	}
@@ -99,12 +103,12 @@ func TestDedupSeriesEpisodesKeepsDifferentEncodes(t *testing.T) {
 		epJSON("10", 1, "Some Show - S01E01", "mp4", h264Info),
 		epJSON("11", 1, "Some Show - S01E01", "mkv", hevcInfo),
 	)
-	out, removed := dedupSeriesEpisodes(decodeLikeXtream(t, answer), false)
+	out, removed := dedupSeriesEpisodes(decodeLikeXtream(t, answer), false, nil)
 	if removed != 0 || len(episodeIDs(t, out)) != 2 {
 		t.Fatalf("different encodes merged: removed=%d ids=%v", removed, episodeIDs(t, out))
 	}
 
-	out, _ = dedupSeriesEpisodes(decodeLikeXtream(t, answer), true)
+	out, _ = dedupSeriesEpisodes(decodeLikeXtream(t, answer), true, nil)
 	eps := out["episodes"].(map[string]interface{})["1"].([]interface{})
 	got := []string{
 		stringField(eps[0].(map[string]interface{})["title"]),
@@ -129,7 +133,7 @@ func TestDedupSeriesEpisodesNeedsComparableInfo(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := decodeLikeXtream(t, answer)
-			out, removed := dedupSeriesEpisodes(in, true)
+			out, removed := dedupSeriesEpisodes(in, true, nil)
 			if removed != 0 || len(episodeIDs(t, out)) != 2 {
 				t.Fatalf("merged: removed=%d ids=%v", removed, episodeIDs(t, out))
 			}
@@ -144,7 +148,7 @@ func TestDedupSeriesEpisodesStringAndNumberFields(t *testing.T) {
 		epJSON("5", "2", "S01E02", "mp4", strInfo),
 		epJSON("4", 2, "S01E02", "mp4", h264Info),
 	))
-	out, removed := dedupSeriesEpisodes(in, false)
+	out, removed := dedupSeriesEpisodes(in, false, nil)
 	if removed != 1 || !reflect.DeepEqual(episodeIDs(t, out), []string{"4"}) {
 		t.Fatalf("removed=%d ids=%v, want one entry with id 4", removed, episodeIDs(t, out))
 	}
@@ -154,7 +158,7 @@ func TestDedupSeriesEpisodesStringAndNumberFields(t *testing.T) {
 func TestAdjustSeasonCountsKeepsNumberType(t *testing.T) {
 	in := decodeLikeXtream(t, `{"seasons":[{"season_number":1,"episode_count":3},{"season_number":2,"episode_count":5}],"episodes":{"1":[`+
 		epJSON("1", 1, "S01E01", "mp4", h264Info)+","+epJSON("2", 1, "S01E01", "mp4", h264Info)+","+epJSON("3", 2, "S01E02", "mp4", h264Info)+`]}}`)
-	out, _ := dedupSeriesEpisodes(in, false)
+	out, _ := dedupSeriesEpisodes(in, false, nil)
 	b, _ := json.Marshal(out["seasons"])
 	if want := `[{"episode_count":2,"season_number":1},{"episode_count":5,"season_number":2}]`; string(b) != want {
 		t.Fatalf("seasons = %s, want %s", b, want)
@@ -204,5 +208,54 @@ func TestPlayerAPISeriesInfoDedup(t *testing.T) {
 		if _, ok := vodNameCached(id); !ok {
 			t.Errorf("title of dropped/kept copy %s not harvested", id)
 		}
+	}
+}
+
+// A copy already in the VOD cache is kept over a lower-id twin, so players are
+// not sent to an uncached copy of a file that is already on disk.
+func TestDedupPrefersCachedCopy(t *testing.T) {
+	t.Setenv("CACHE_FOLDER", t.TempDir())
+	ep := func(id string) map[string]interface{} {
+		return map[string]interface{}{
+			"id": id, "episode_num": "24", "season": "7", "title": "Some Show - S07E24", "container_extension": "mkv",
+			"info": map[string]interface{}{"duration_secs": "1330", "video": map[string]interface{}{"codec_name": "hevc", "profile": "2", "pix_fmt": "yuv420p10le", "height": "1080"}, "audio": map[string]interface{}{"codec_name": "aac"}},
+		}
+	}
+	answer := func() map[string]interface{} {
+		return map[string]interface{}{"episodes": map[string]interface{}{"7": []interface{}{ep("100"), ep("101")}}}
+	}
+	c := &Config{ProxyConfig: &config.ProxyConfig{VODCacheEnabled: true, SeriesEpisodeDedupEnabled: true}}
+	keptID := func(out interface{}) string {
+		eps := out.(map[string]interface{})["episodes"].(map[string]interface{})["7"].([]interface{})
+		if len(eps) != 1 {
+			t.Fatalf("want 1 episode, got %d", len(eps))
+		}
+		return eps[0].(map[string]interface{})["id"].(string)
+	}
+
+	if got := keptID(c.seriesEpisodeDedup(answer())); got != "100" {
+		t.Fatalf("nothing cached: kept %s, want lowest id 100", got)
+	}
+
+	dir := utils.VODCacheDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A download in progress (.part) does not count.
+	if err := os.WriteFile(filepath.Join(dir, "101.mkv.part"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := keptID(c.seriesEpisodeDedup(answer())); got != "100" {
+		t.Fatalf("only a .part on disk: kept %s, want 100", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "101.mkv"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := keptID(c.seriesEpisodeDedup(answer())); got != "101" {
+		t.Fatalf("101 cached: kept %s, want 101", got)
+	}
+	c.VODCacheEnabled = false
+	if got := keptID(c.seriesEpisodeDedup(answer())); got != "100" {
+		t.Fatalf("cache disabled: kept %s, want 100", got)
 	}
 }

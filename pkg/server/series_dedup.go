@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -185,6 +187,8 @@ type episodeCluster struct {
 	pos       int // index of its first copy in the season list (keeps ordering)
 	survivor  map[string]interface{}
 	survivorN int64 // numeric id of the survivor, for the lowest-id rule
+	preferred bool  // survivor is a copy the caller prefers (e.g. already cached)
+	checked   bool  // preferred has been computed for the current survivor
 	fp        episodeFingerprint
 	title     string
 }
@@ -195,7 +199,11 @@ type episodeCluster struct {
 // lists, so callers that already handed info to someone else stay safe. When
 // tagVariants is set, the kept alternatives of one episode get a technical tag
 // appended to their title. Answers without duplicates are returned as-is.
-func dedupSeriesEpisodes(info map[string]interface{}, tagVariants bool) (map[string]interface{}, int) {
+//
+// prefer, when non-nil, marks copies to keep over the others (e.g. one already
+// in the VOD cache, so players are not sent to an uncached twin); among equally
+// preferred copies the lowest numeric id wins.
+func dedupSeriesEpisodes(info map[string]interface{}, tagVariants bool, prefer func(ep map[string]interface{}) bool) (map[string]interface{}, int) {
 	bySeason, ok := info["episodes"].(map[string]interface{})
 	if !ok || len(bySeason) == 0 {
 		return info, 0
@@ -211,7 +219,7 @@ func dedupSeriesEpisodes(info map[string]interface{}, tagVariants bool) (map[str
 			newSeasons[seasonKey] = v
 			continue
 		}
-		kept, n, retitled := dedupSeasonEpisodes(eps, tagVariants)
+		kept, n, retitled := dedupSeasonEpisodes(eps, tagVariants, prefer)
 		if n > 0 || retitled {
 			changed = true
 		}
@@ -238,7 +246,7 @@ func dedupSeriesEpisodes(info map[string]interface{}, tagVariants bool) (map[str
 // It returns the kept entries in their original order (each cluster at the
 // position of its first copy), how many were dropped, and whether any title
 // was tagged.
-func dedupSeasonEpisodes(eps []interface{}, tagVariants bool) ([]interface{}, int, bool) {
+func dedupSeasonEpisodes(eps []interface{}, tagVariants bool, prefer func(ep map[string]interface{}) bool) ([]interface{}, int, bool) {
 	type slot struct {
 		raw     interface{}     // entries that are never merged, as-is
 		cluster *episodeCluster // or a cluster of copies
@@ -269,15 +277,23 @@ func dedupSeasonEpisodes(eps []interface{}, tagVariants bool) ([]interface{}, in
 		}
 		if match == nil {
 			cl := &episodeCluster{pos: len(slots), survivor: em, survivorN: id, fp: fp, title: title}
+			// prefer is consulted lazily, only once a second copy shows up.
 			groups[epNum] = append(groups[epNum], cl)
 			slots = append(slots, slot{cluster: cl})
 			continue
 		}
+		if !match.checked {
+			match.preferred = prefer != nil && prefer(match.survivor)
+			match.checked = true
+		}
 		removed++
-		// Keep the lowest numeric id: stable across provider refreshes, so a
-		// cached file or a history row keyed by that id keeps matching.
-		if id >= 0 && (match.survivorN < 0 || id < match.survivorN) {
-			match.survivor, match.survivorN, match.fp = em, id, fp
+		// Keep a preferred copy (e.g. already cached) first, then the lowest
+		// numeric id: stable across provider refreshes, so a cached file or a
+		// history row keyed by that id keeps matching.
+		pref := prefer != nil && prefer(em)
+		lower := id >= 0 && (match.survivorN < 0 || id < match.survivorN)
+		if (pref && !match.preferred) || (pref == match.preferred && lower) {
+			match.survivor, match.survivorN, match.fp, match.preferred = em, id, fp, pref
 		}
 	}
 
@@ -368,11 +384,27 @@ func (c *Config) seriesEpisodeDedup(resp interface{}) interface{} {
 	if !ok {
 		return resp
 	}
-	out, removed := dedupSeriesEpisodes(info, c.SeriesEpisodeDedupTagVariants)
+	out, removed := dedupSeriesEpisodes(info, c.SeriesEpisodeDedupTagVariants, c.episodeCached)
 	if removed > 0 {
 		utils.DebugLog("Series dedup: dropped %d duplicate episode entr(ies)", removed)
 	}
 	return out
+}
+
+// episodeCached reports whether an episode's file is complete in the VOD cache
+// (named <id><.ext>, as streamVODWithCache writes it; a download in progress
+// is still a .part file). A stat, no database round trip.
+func (c *Config) episodeCached(ep map[string]interface{}) bool {
+	if !c.VODCacheEnabled {
+		return false
+	}
+	id := strings.TrimSpace(stringField(firstNonEmpty(ep["id"], ep["stream_id"])))
+	ext := strings.TrimSpace(stringField(ep["container_extension"]))
+	if id == "" || ext == "" || !isValidStreamID(id) || strings.ContainsAny(ext, "/\\") {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(utils.VODCacheDir(), id+"."+strings.TrimPrefix(ext, ".")))
+	return err == nil && !fi.IsDir()
 }
 
 // idNumber is an episode's numeric id, or -1 when it has none.
