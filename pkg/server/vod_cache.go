@@ -45,14 +45,32 @@ var vodCacheClient = &http.Client{
 	},
 }
 
+// vodCacheStallTimeout aborts a download attempt that receives no bytes for
+// this long, so a connection the provider leaves open but silent is retried
+// (resuming at the current offset) instead of hanging forever.
+var vodCacheStallTimeout = 60 * time.Second
+
+// vodCacheRetryBackoff is the wait before a download retry, multiplied by the
+// attempt number (3 s, 6 s, ... 15 s).
+var vodCacheRetryBackoff = 3 * time.Second
+
 // fetchToFile downloads from upstream URL to a local file; marks DB entry ready/failed.
 // On connection drops (unexpected EOF) it retries automatically using a Range header to
 // resume from the current offset, up to maxCacheRetries times. Cancelling ctx aborts the
 // download immediately, removes the partial file, and clears the DB entry.
-func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, basePath string, expires time.Time) {
+//
+// dl publishes the download's progress to requests served from the file while
+// it is written (see serveVODDownload); it is finished on every return.
+func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, dest, streamID, basePath string, expires time.Time) {
+	result := fmt.Errorf("download did not complete")
+	defer func() { dl.finish(result) }()
+
 	utils.InfoLog("Caching start: %s -> %s", utils.MaskURL(upstream), dest)
 	tmp := dest + ".part"
 
+	// A new inode: readers still holding a previous attempt's file keep
+	// reading their own copy instead of one truncated under them.
+	_ = os.Remove(tmp)
 	f, err := os.Create(tmp)
 	if err != nil {
 		utils.ErrorLog("Cache: create file error: %v", err)
@@ -71,7 +89,7 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 			break
 		}
 		if attempt > 0 {
-			backoff := time.Duration(attempt) * 3 * time.Second
+			backoff := time.Duration(attempt) * vodCacheRetryBackoff
 			utils.WarnLog("Cache: connection interrupted at %s/%s, retrying in %s (attempt %d/%d)",
 				utils.HumanBytes(downloaded), utils.HumanBytes(total), backoff, attempt, maxCacheRetries)
 			time.Sleep(backoff)
@@ -83,8 +101,10 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 			}
 		}
 
-		req, reqErr := http.NewRequestWithContext(ctx, "GET", upstream, nil)
+		attemptCtx, cancelAttempt := context.WithCancel(ctx)
+		req, reqErr := http.NewRequestWithContext(attemptCtx, "GET", upstream, nil)
 		if reqErr != nil {
+			cancelAttempt()
 			utils.ErrorLog("Cache: failed to build request: %v", reqErr)
 			c.cacheFail(streamID)
 			return
@@ -96,6 +116,7 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 
 		resp, doErr := vodCacheClient.Do(req)
 		if doErr != nil {
+			cancelAttempt()
 			utils.WarnLog("Cache: upstream error (attempt %d): %v", attempt, doErr)
 			continue
 		}
@@ -106,13 +127,16 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 			if downloaded > 0 {
 				utils.WarnLog("Cache: provider ignored Range header, restarting download for %s", streamID)
 				downloaded = 0
+				dl.restart()
 				if tErr := f.Truncate(0); tErr != nil {
+					cancelAttempt()
 					_ = resp.Body.Close()
 					utils.ErrorLog("Cache: truncate error: %v", tErr)
 					c.cacheFail(streamID)
 					return
 				}
 				if _, sErr := f.Seek(0, io.SeekStart); sErr != nil {
+					cancelAttempt()
 					_ = resp.Body.Close()
 					utils.ErrorLog("Cache: seek error: %v", sErr)
 					c.cacheFail(streamID)
@@ -140,23 +164,32 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 				}
 			}
 		default:
+			cancelAttempt()
 			_ = resp.Body.Close()
 			utils.WarnLog("Cache: upstream status %d (attempt %d)", resp.StatusCode, attempt)
 			continue
 		}
+		dl.setTotal(total)
 
+		// Written straight to the file (no buffering) and published right
+		// after, so readers of the file see every counted byte.
 		buf := make([]byte, 256*1024)
 		var readErr error
+		stall := time.AfterFunc(vodCacheStallTimeout, cancelAttempt)
+		body := &stallReader{r: resp.Body, timer: stall, idle: vodCacheStallTimeout}
 		for {
-			nr, er := resp.Body.Read(buf)
+			nr, er := body.Read(buf)
 			if nr > 0 {
 				if _, ew := f.Write(buf[:nr]); ew != nil {
+					stall.Stop()
+					cancelAttempt()
 					_ = resp.Body.Close()
 					utils.ErrorLog("Cache: write error: %v", ew)
 					c.cacheFail(streamID)
 					return
 				}
 				downloaded += int64(nr)
+				dl.advance(int64(nr))
 				if c.db != nil && time.Since(lastUpdate) > vodProgressInterval {
 					// Narrow update: only the counters move, so there is no need
 					// to rewrite the whole row on every tick.
@@ -169,6 +202,8 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 				break
 			}
 		}
+		stall.Stop()
+		cancelAttempt()
 		_ = resp.Body.Close()
 
 		if readErr == io.EOF || (total > 0 && downloaded >= total) {
@@ -190,6 +225,7 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 		}
 		utils.ErrorLog("Cache: download failed after %d retries: %s", maxCacheRetries, utils.MaskURL(upstream))
 		c.cacheFail(streamID)
+		result = fmt.Errorf("download failed after %d retries", maxCacheRetries)
 		return
 	}
 
@@ -202,6 +238,7 @@ func (c *Config) fetchToFile(ctx context.Context, upstream, dest, streamID, base
 		c.cacheFail(streamID)
 		return
 	}
+	result = nil
 	utils.InfoLog("Caching done: %s (%s)", dest, utils.HumanBytes(n))
 	if c.db != nil {
 		var finalTitle string
@@ -283,19 +320,32 @@ func (c *Config) resolveVODCacheURL(basePath, defaultExt, id string) (upstream, 
 	return upstream, dest, idRaw
 }
 
-// startBackgroundDownload spawns a background fetchToFile for a VOD stream,
-// deduplicating concurrent downloads for the same stream ID via
-// inProgressDownloads. The download outlives the request that started it — it
-// runs until completion or failure, the same way an explicit /cache request does.
-func (c *Config) startBackgroundDownload(upstream, dest, streamID, basePath string, expires time.Time) {
-	downloadCtx, downloadCancel := context.WithCancel(context.Background())
-	if _, loaded := c.inProgressDownloads.LoadOrStore(streamID, downloadCancel); loaded {
-		downloadCancel()
-		return
+// startBackgroundDownload returns the cache download of a VOD stream, starting
+// it unless one is already running: there is at most one per stream ID, so its
+// requests share a single provider connection. onStart, if set, runs before a
+// new download begins (not when joining one). The download outlives the
+// request that started it — it runs until completion or failure, the same way
+// an explicit /cache request does.
+func (c *Config) startBackgroundDownload(upstream, dest, streamID, basePath string, expires time.Time, onStart func()) *vodDownload {
+	for {
+		dl := newVODDownload(dest)
+		v, loaded := c.inProgressDownloads.LoadOrStore(streamID, dl)
+		if loaded {
+			existing := v.(*vodDownload)
+			if existing.failed() {
+				// Ended without the file: start over rather than serve it.
+				c.inProgressDownloads.CompareAndDelete(streamID, existing)
+				continue
+			}
+			return existing
+		}
+		if onStart != nil {
+			onStart()
+		}
+		go func() {
+			defer c.inProgressDownloads.CompareAndDelete(streamID, dl)
+			c.fetchToFile(context.Background(), dl, upstream, dest, streamID, basePath, expires)
+		}()
+		return dl
 	}
-	go func() {
-		defer c.inProgressDownloads.Delete(streamID)
-		defer downloadCancel()
-		c.fetchToFile(downloadCtx, upstream, dest, streamID, basePath, expires)
-	}()
 }
