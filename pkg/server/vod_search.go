@@ -599,6 +599,9 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 				return
 			}
 			c.harvestSeriesEpisodeTitles(match.name, im)
+			if deduped, ok := c.seriesEpisodeDedup(im).(map[string]interface{}); ok {
+				im = deduped
+			}
 			epsBySeason, ok := im["episodes"].(map[string]interface{})
 			if !ok {
 				return

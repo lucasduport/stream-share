@@ -140,6 +140,24 @@ Configuration:
 | `M3U_DEDUP_ENABLED` | `false` | Set to `true` to enable deduplication |
 | `M3U_DEDUP_PREFERRED_LANGS` | `fra` | Comma-separated ordered list of preferred audio languages (e.g. `fra,eng`); among equal-quality duplicates the most preferred language wins |
 
+### Series Episode Deduplication
+
+Some providers list the same episode of a series several times under different stream ids: in a player, the episode shows up twice (or more), and picking each copy downloads the same file again. With `SERIES_EPISODE_DEDUP_ENABLED=true`, the server merges those copies in the `get_series_info` answer players browse (and in the Discord `/watch` series search). It is **off by default**: with it off, answers are passed through unchanged.
+
+Two entries are merged only when everything comparable says they are the same file:
+
+- same season and episode number, and the same title (case and spacing aside);
+- the same technical info from the provider: duration within 2 seconds, video codec, profile, pixel format and height, audio codec, and container.
+
+An entry whose info lacks a duration or a video codec can't be compared and is never merged. The copy with the lowest stream id is kept, so a file already cached or a history row for that id keeps matching; a dropped copy still plays if a player asks for its id directly. The season's `episode_count` is lowered accordingly.
+
+Copies of one episode with different technical info (say an H.264 and an HEVC 10-bit encode) are genuine alternatives and are all kept. Set `SERIES_EPISODE_DEDUP_TAG_VARIANTS=true` to append what tells them apart to their titles, e.g. `S01E02 [HEVC 10-bit]` and `S01E02 [H.264]`, so you can pick the one your device plays.
+
+| Env var | Default | Description |
+|---|---|---|
+| `SERIES_EPISODE_DEDUP_ENABLED` | `false` | Merge identical duplicate copies of an episode |
+| `SERIES_EPISODE_DEDUP_TAG_VARIANTS` | `false` | Tag the titles of an episode's different encodes |
+
 ### Catalogue Filtering
 
 Providers often ship catalogues of tens of thousands of channels and hundreds of thousands of movies and episodes, most of them in languages nobody on your server watches. Every player then downloads and indexes all of it. The catalogue filter keeps only what you want, on the server, so players only ever receive the entries you kept. It is **off by default**: with nothing configured, every answer is passed through unchanged.

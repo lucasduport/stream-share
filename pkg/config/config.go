@@ -68,12 +68,19 @@ type ProxyConfig struct {
 	// audio language codes (e.g. "fra,eng"); among equal-quality duplicates
 	// the entry in the most preferred language wins.
 	M3UDedupPreferredLangs string
-	CustomEndpoint         string
-	CustomId               string
-	RemoteURL              *url.URL
-	AdvertisedPort         int
-	HTTPS                  bool
-	User, Password         CredentialString
+	// SeriesEpisodeDedupEnabled merges the duplicate copies of an episode that
+	// some providers list several times in get_series_info (same season,
+	// number, title and technical fingerprint), keeping one.
+	SeriesEpisodeDedupEnabled bool
+	// SeriesEpisodeDedupTagVariants appends a technical tag (e.g. "HEVC
+	// 10-bit") to the titles of an episode's kept alternative encodes.
+	SeriesEpisodeDedupTagVariants bool
+	CustomEndpoint                string
+	CustomId                      string
+	RemoteURL                     *url.URL
+	AdvertisedPort                int
+	HTTPS                         bool
+	User, Password                CredentialString
 
 	// CatalogFilter keeps only the catalogue entries (live channels, movies,
 	// series) that pass its regular expressions, in every list served to

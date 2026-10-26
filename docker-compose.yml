@@ -11,6 +11,8 @@ services:
       M3U_CACHE_EXPIRATION_HOURS: "24"       # Cache expiration in hours
       M3U_DEDUP_ENABLED: "false"          # Remove redundant tracks (duplicate stream IDs, same-title language/quality copies) from the generated M3U
       M3U_DEDUP_PREFERRED_LANGS: "fra"    # Comma-separated ordered list of preferred audio languages for dedup (e.g. "fra,eng")
+      SERIES_EPISODE_DEDUP_ENABLED: "false"       # Merge identical duplicate copies of a series episode in get_series_info
+      SERIES_EPISODE_DEDUP_TAG_VARIANTS: "false"  # Tag the titles of an episode's different encodes, e.g. "[HEVC 10-bit]"
 
       # Catalogue filter (all empty = off). RE2 expressions on an entry's group (category) and name; see README "Catalogue Filtering".
       # Same five variables with the FILTER_LIVE_, FILTER_MOVIE_ and FILTER_SERIES_ prefixes for one kind only.
