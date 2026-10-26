@@ -41,11 +41,13 @@ import (
 // cache download used to kill each other until one of them gave up.
 //
 // Players are answered as if the file were complete (its total size, Range
-// support) and the body follows the download: a read ahead of what has been
-// written waits for it. A player whose position is far ahead of the download
-// (a seek, or an MP4 index stored at the end of the file) waits on the body,
-// and if it times out it reconnects and resumes from its position, attached
-// to the same download.
+// support) and the body follows the download. A read just ahead of what has
+// been written waits for it. A read far ahead (a seek, or a container index
+// stored at the end of the file, which demuxers read before playing) asks the
+// download for a window: the downloader pauses the sequential download, fetches
+// that byte range from the provider with a Range request, then resumes where it
+// stopped. The provider still sees a single connection at a time, and the
+// player gets its bytes within moments instead of after the whole file.
 
 var (
 	// vodProgressiveHeaderWait bounds how long a request waits for the
@@ -64,6 +66,31 @@ var (
 // vodProgressiveChunk is the size of each read from the cache file.
 const vodProgressiveChunk = 256 * 1024
 
+var (
+	// vodWindowSize is how much a window fetches past the requested offset.
+	// Readers get the window's bytes as they land, and ask for the next window
+	// when they reach its end, so this only bounds how long the sequential
+	// download is paused per window: 4 MiB is ~2 s at 2 MB/s. Index elements
+	// at the end of a file (matroska cues and tags, an MP4 moov) are almost
+	// always smaller.
+	vodWindowSize int64 = 4 << 20
+	// vodWindowMinGap and vodWindowHorizon decide when a read ahead is worth a
+	// window rather than waiting: only when the sequential download would need
+	// more than vodWindowHorizon to reach it at its measured rate, and never
+	// for less than vodWindowMinGap.
+	vodWindowMinGap  int64 = 2 << 20
+	vodWindowHorizon       = 3 * time.Second
+	// vodWindowMainRun is the least time the sequential download runs between
+	// two windows, so readers asking for window after window cannot stall it.
+	vodWindowMainRun = 500 * time.Millisecond
+	// vodWindowMaxFailures disables windows for a download after this many
+	// failed window fetches; readers then wait for the sequential download.
+	vodWindowMaxFailures = 3
+)
+
+// byteSpan is the half-open byte range [start, end).
+type byteSpan struct{ start, end int64 }
+
 // vodDownload is the state of one cache download, shared by every request
 // served from it. The download writes straight to the .part file (no
 // buffering), so every byte counted in written is readable from it.
@@ -71,16 +98,31 @@ type vodDownload struct {
 	part, dest string
 
 	mu      sync.Mutex
-	written int64 // bytes written to the .part file
+	written int64 // bytes written to the .part file, from offset 0
 	total   int64 // full size, 0 while unknown
 	headers bool  // the provider has answered (total is known if it sent one)
 	done    bool
 	err     error
 	changed chan struct{} // closed and replaced on every state change
+
+	// Windows: byte ranges past written already fetched into the .part file
+	// (sorted, disjoint), and the ones readers are waiting for. wake tells the
+	// downloader that a window is wanted.
+	windows        []byteSpan
+	wanted         []byteSpan
+	wake           chan struct{}
+	noWindows      bool // the provider ignored a ranged request, or windows kept failing
+	windowFailures int
+
+	// Sequential download rate (bytes/s, smoothed), to judge whether a read
+	// ahead is worth a window.
+	rate     float64
+	rateAt   time.Time
+	rateFrom int64
 }
 
 func newVODDownload(dest string) *vodDownload {
-	return &vodDownload{part: dest + ".part", dest: dest, changed: make(chan struct{})}
+	return &vodDownload{part: dest + ".part", dest: dest, changed: make(chan struct{}), wake: make(chan struct{}, 1)}
 }
 
 // notifyLocked wakes every waiter. The caller holds d.mu.
@@ -101,21 +143,185 @@ func (d *vodDownload) setTotal(total int64) {
 	d.mu.Unlock()
 }
 
-// advance records n more bytes written to the .part file.
+// advance records n more bytes written to the .part file by the sequential
+// download.
 func (d *vodDownload) advance(n int64) {
 	d.mu.Lock()
 	d.written += n
+	now := time.Now()
+	if d.rateAt.IsZero() {
+		d.rateAt, d.rateFrom = now, d.written-n
+	} else if dt := now.Sub(d.rateAt); dt >= 500*time.Millisecond {
+		inst := float64(d.written-d.rateFrom) / dt.Seconds()
+		if d.rate == 0 {
+			d.rate = inst
+		} else {
+			d.rate = 0.7*d.rate + 0.3*inst
+		}
+		d.rateAt, d.rateFrom = now, d.written
+	}
+	// Windows now inside the sequential prefix are no longer needed.
+	kept := d.windows[:0]
+	for _, w := range d.windows {
+		if w.end > d.written {
+			kept = append(kept, w)
+		}
+	}
+	d.windows = kept
 	d.notifyLocked()
 	d.mu.Unlock()
 }
 
+// resumeSequential resets the rate sample when the sequential download starts
+// again after a pause (a window or a retry), so the pause is not counted as a
+// slow transfer.
+func (d *vodDownload) resumeSequential() {
+	d.mu.Lock()
+	d.rateAt = time.Time{}
+	d.mu.Unlock()
+}
+
 // restart records that the .part file was truncated to rewrite it from the
-// start (the provider ignored a resume Range).
+// start (the provider ignored a resume Range). Fetched windows are gone with
+// it, and a provider that ignores Range cannot serve windows either.
 func (d *vodDownload) restart() {
 	d.mu.Lock()
 	d.written = 0
+	d.windows, d.wanted, d.noWindows = nil, nil, true
 	d.notifyLocked()
 	d.mu.Unlock()
+}
+
+// readableEndLocked returns the end of the bytes readable from off without
+// waiting: past the sequential prefix and any fetched windows contiguous with
+// it. It returns off when nothing is readable there. The caller holds d.mu.
+func (d *vodDownload) readableEndLocked(off int64) int64 {
+	end := off
+	if off < d.written {
+		end = d.written
+	}
+	for _, w := range d.windows { // sorted, so contiguous windows chain
+		if w.start <= end && w.end > end {
+			end = w.end
+		}
+	}
+	return end
+}
+
+// readableEnd is readableEndLocked for callers not holding d.mu.
+func (d *vodDownload) readableEnd(off int64) int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.readableEndLocked(off)
+}
+
+// requestWindow asks the downloader to fetch the bytes at off ahead of the
+// sequential download, unless they are already readable, already asked for,
+// or close enough for the sequential download to bring soon.
+func (d *vodDownload) requestWindow(off int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.noWindows || d.done || d.total <= 0 || off >= d.total || d.readableEndLocked(off) > off {
+		return
+	}
+	gap := off - d.written
+	threshold := vodWindowMinGap
+	if h := int64(d.rate * vodWindowHorizon.Seconds()); h > threshold {
+		threshold = h
+	}
+	if gap <= threshold {
+		return
+	}
+	for _, w := range d.wanted {
+		if off >= w.start && off < w.end {
+			return
+		}
+	}
+	end := off + vodWindowSize
+	if end > d.total {
+		end = d.total
+	}
+	d.wanted = append(d.wanted, byteSpan{off, end})
+	select {
+	case d.wake <- struct{}{}:
+	default:
+	}
+}
+
+// windowWanted reports whether a reader waits for a window.
+func (d *vodDownload) windowWanted() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.wanted) > 0 && !d.noWindows
+}
+
+// nextWindow pops the next window to fetch, skipping ones the download
+// already covers.
+func (d *vodDownload) nextWindow() (byteSpan, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for len(d.wanted) > 0 && !d.noWindows {
+		w := d.wanted[0]
+		d.wanted = d.wanted[1:]
+		if r := d.readableEndLocked(w.start); r > w.start {
+			if r >= w.end {
+				continue
+			}
+			w.start = r // only the part still missing
+		}
+		return w, true
+	}
+	return byteSpan{}, false
+}
+
+// addWindow records that [start, end) has been written to the .part file.
+func (d *vodDownload) addWindow(start, end int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if end <= start || end <= d.written {
+		return
+	}
+	merged := make([]byteSpan, 0, len(d.windows)+1)
+	nw := byteSpan{start, end}
+	placed := false
+	for _, w := range d.windows {
+		switch {
+		case w.end < nw.start:
+			merged = append(merged, w)
+		case w.start > nw.end:
+			if !placed {
+				merged = append(merged, nw)
+				placed = true
+			}
+			merged = append(merged, w)
+		default: // overlapping or adjacent: absorb
+			if w.start < nw.start {
+				nw.start = w.start
+			}
+			if w.end > nw.end {
+				nw.end = w.end
+			}
+		}
+	}
+	if !placed {
+		merged = append(merged, nw)
+	}
+	d.windows = merged
+	d.notifyLocked()
+}
+
+// windowFailed counts a failed window fetch; past vodWindowMaxFailures, or
+// immediately when the provider ignored the Range (rangeIgnored), windows are
+// disabled and readers fall back to waiting for the sequential download.
+func (d *vodDownload) windowFailed(rangeIgnored bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.windowFailures++
+	if rangeIgnored || d.windowFailures >= vodWindowMaxFailures {
+		d.noWindows = true
+		d.wanted = nil
+	}
+	d.notifyLocked()
 }
 
 // finish records the end of the download: err is nil once the complete file
@@ -253,8 +459,8 @@ func (c *Config) serveVODDownload(ctx *gin.Context, dl *vodDownload, label, file
 	off := start
 	for end < 0 || off <= end {
 		st = dl.state()
-		if off < st.written {
-			n := st.written - off
+		if avail := dl.readableEnd(off); avail > off {
+			n := avail - off
 			if n > int64(len(buf)) {
 				n = int64(len(buf))
 			}
@@ -286,6 +492,10 @@ func (c *Config) serveVODDownload(ctx *gin.Context, dl *vodDownload, label, file
 				abortResponse(ctx)
 			}
 			return // complete (unknown total) or failed
+		} else if st.total > 0 {
+			// Ahead of the download: fetch these bytes out of order if the
+			// sequential download would take a while to bring them.
+			dl.requestWindow(off)
 		}
 
 		select {

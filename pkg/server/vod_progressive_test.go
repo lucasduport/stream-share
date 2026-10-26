@@ -40,17 +40,53 @@ import (
 
 // fakeVODProvider serves one file with Range support and controllable pacing.
 type fakeVODProvider struct {
-	data     []byte
-	chunk    int           // bytes per write
-	delay    time.Duration // pause after each write
-	stallAt  int64         // absolute offset at which to pause stallFor (once), 0 = never
-	stallFor time.Duration
-	abortAt  int64 // absolute offset at which every response is cut, 0 = never
-	noLength bool  // send no Content-Length (chunked)
+	data        []byte
+	chunk       int           // bytes per write
+	delay       time.Duration // pause after each write
+	stallAt     int64         // absolute offset at which to pause stallFor (once), 0 = never
+	stallFor    time.Duration
+	abortAt     int64 // absolute offset at which every response is cut, 0 = never
+	noLength    bool  // send no Content-Length (chunked)
+	ignoreRange bool  // answer every request with the whole file (200)
 
 	requests  int32 // connections opened for the file itself
 	stallOnce sync.Once
 	paths     sync.Map
+
+	mu     sync.Mutex
+	ranges []string    // Range header of each file request ("" for none)
+	opened []time.Time // when each file connection opened
+	closed []time.Time // when it closed (zero while open)
+}
+
+// maxConcurrent returns the most file connections the provider had open at
+// once, ignoring overlaps shorter than slack: a client closing one connection
+// and opening the next is seen a few milliseconds late by the server, which
+// is not two connections in use.
+func (p *fakeVODProvider) maxConcurrent(slack time.Duration) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	best := 0
+	for _, s := range p.opened {
+		n := 0
+		for j, o := range p.opened {
+			c := p.closed[j]
+			if !o.After(s) && (c.IsZero() || c.Add(-slack).After(s)) {
+				n++
+			}
+		}
+		if n > best {
+			best = n
+		}
+	}
+	return best
+}
+
+// rangesSeen returns the Range headers received so far.
+func (p *fakeVODProvider) rangesSeen() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.ranges...)
 }
 
 func (p *fakeVODProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,14 +96,37 @@ func (p *fakeVODProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	atomic.AddInt32(&p.requests, 1)
+	p.mu.Lock()
+	p.ranges = append(p.ranges, r.Header.Get("Range"))
+	p.mu.Unlock()
+	// A connection counts as open until the client closes it (the request
+	// context ends then), which is what a one-connection provider enforces.
+	p.mu.Lock()
+	idx := len(p.opened)
+	p.opened = append(p.opened, time.Now())
+	p.closed = append(p.closed, time.Time{})
+	p.mu.Unlock()
+	go func() {
+		<-r.Context().Done()
+		p.mu.Lock()
+		p.closed[idx] = time.Now()
+		p.mu.Unlock()
+	}()
+
 	total := int64(len(p.data))
-	start := int64(0)
-	if rg := r.Header.Get("Range"); strings.HasPrefix(rg, "bytes=") {
-		s, _ := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(rg, "bytes="), "-"), 10, 64)
-		start = s
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, total-1, total))
+	start, last := int64(0), total-1
+	if rg := r.Header.Get("Range"); strings.HasPrefix(rg, "bytes=") && !p.ignoreRange {
+		spec := strings.TrimPrefix(rg, "bytes=")
+		a, b, _ := strings.Cut(spec, "-")
+		start, _ = strconv.ParseInt(a, 10, 64)
+		if b != "" {
+			if e, err := strconv.ParseInt(b, 10, 64); err == nil && e < last {
+				last = e
+			}
+		}
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, last, total))
 		if !p.noLength {
-			w.Header().Set("Content-Length", strconv.FormatInt(total-start, 10))
+			w.Header().Set("Content-Length", strconv.FormatInt(last-start+1, 10))
 		}
 		w.WriteHeader(http.StatusPartialContent)
 	} else {
@@ -77,7 +136,7 @@ func (p *fakeVODProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}
 	fl, _ := w.(http.Flusher)
-	for off := start; off < total; {
+	for off := start; off <= last; {
 		if p.abortAt > 0 && off >= p.abortAt {
 			panic(http.ErrAbortHandler)
 		}
@@ -91,8 +150,8 @@ func (p *fakeVODProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if p.stallAt > 0 && off < p.stallAt && end > p.stallAt {
 			end = p.stallAt
 		}
-		if end > total {
-			end = total
+		if end > last+1 {
+			end = last + 1
 		}
 		if _, err := w.Write(p.data[off:end]); err != nil {
 			return
