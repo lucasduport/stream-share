@@ -219,6 +219,8 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 		if info, ok := resp.(map[string]interface{}); ok {
 			c.harvestSeriesEpisodeTitles("", info)
 		}
+		// Merge duplicate copies after harvesting, which wants every id.
+		processedResp = c.seriesEpisodeDedup(processedResp)
 	}
 
 	if config.CacheFolder != "" && utils.IsDebugLogEnabled() {

@@ -112,13 +112,15 @@ It supports:
 				Hostname: hostname,
 				Port:     viper.GetInt("port"),
 			},
-			RemoteURL:              remoteHostURL,
-			XtreamUser:             config.CredentialString(xtreamUser),
-			XtreamPassword:         config.CredentialString(xtreamPassword),
-			XtreamBaseURL:          xtreamBaseURL,
-			M3UCacheExpiration:     viper.GetInt("m3u-cache-expiration-hours"),
-			M3UDedupEnabled:        viper.GetBool("m3u-dedup-enabled"),
-			M3UDedupPreferredLangs: viper.GetString("m3u-dedup-preferred-langs"),
+			RemoteURL:                     remoteHostURL,
+			XtreamUser:                    config.CredentialString(xtreamUser),
+			XtreamPassword:                config.CredentialString(xtreamPassword),
+			XtreamBaseURL:                 xtreamBaseURL,
+			M3UCacheExpiration:            viper.GetInt("m3u-cache-expiration-hours"),
+			M3UDedupEnabled:               viper.GetBool("m3u-dedup-enabled"),
+			M3UDedupPreferredLangs:        viper.GetString("m3u-dedup-preferred-langs"),
+			SeriesEpisodeDedupEnabled:     viper.GetBool("series-episode-dedup-enabled"),
+			SeriesEpisodeDedupTagVariants: viper.GetBool("series-episode-dedup-tag-variants"),
 			CatalogFilter: filter.Config{
 				All:          filterPatterns("filter"),
 				Live:         filterPatterns("filter-live"),
@@ -247,6 +249,8 @@ func init() {
 	rootCmd.Flags().Int("m3u-cache-expiration-hours", 1, "M3U cache expiration in hours")
 	rootCmd.Flags().Bool("m3u-dedup-enabled", false, "Remove redundant tracks (duplicate stream IDs, same-title movie/live language/quality copies) from the generated M3U")
 	rootCmd.Flags().String("m3u-dedup-preferred-langs", "fra", "Comma-separated ordered list of preferred audio languages for M3U dedup (e.g. \"fra,eng\")")
+	rootCmd.Flags().Bool("series-episode-dedup-enabled", false, "Merge identical duplicate copies of a series episode (same season, number, title and technical info) in get_series_info")
+	rootCmd.Flags().Bool("series-episode-dedup-tag-variants", false, "With series episode dedup, tag the titles of an episode's different encodes (e.g. \"[HEVC 10-bit]\")")
 
 	// Catalogue filter (all empty = no filtering). Each prefix takes four RE2
 	// expressions: <prefix>-group-regex / -name-regex keep what they match,
