@@ -184,6 +184,7 @@ It supports:
 			InstanceName:               viper.GetString("instance-name"),
 			StreamTechProbeEnabled:     viper.GetBool("stream-tech-probe-enabled"),
 			ProviderInfoRefreshMinutes: viper.GetInt("provider-info-refresh-minutes"),
+			ProviderMaxConnections:     viper.GetInt("provider-max-connections"),
 
 			// Provider health check (reporting only; VPN reconnect is external)
 			HealthCheckEnabled:            viper.GetBool("healthcheck-enabled"),
@@ -325,6 +326,7 @@ func init() {
 	// Dashboard configuration
 	rootCmd.Flags().String("instance-name", "", "Friendly name for this instance, used to identify it in a multi-instance dashboard (defaults to hostname)")
 	rootCmd.Flags().Bool("stream-tech-probe-enabled", false, "Expose audio/video technical info (codec, resolution, bitrate) for active live streams via the dashboard API; requires ffprobe in the runtime image")
+	rootCmd.Flags().Int("provider-max-connections", 0, "Most media connections opened to the provider at once; watched streams preempt background VOD downloads (0 = the limit the provider reports, none while unknown; -1 = no arbitration)")
 	rootCmd.Flags().Int("provider-info-refresh-minutes", 15, "How often to refresh the upstream provider's subscription info (expiry, connection limit) exposed at /api/internal/provider")
 
 	// Bind all flags to viper

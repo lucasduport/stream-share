@@ -114,6 +114,13 @@ type vodDownload struct {
 	noWindows      bool // the provider ignored a ranged request, or windows kept failing
 	windowFailures int
 
+	// Requests currently served from this download, and when the last one
+	// ended: a download with a reader, or one that had a reader moments ago
+	// (players drop and reopen connections when seeking), is in the
+	// foreground for provider-slot arbitration.
+	readers      int
+	lastReaderAt time.Time
+
 	// Sequential download rate (bytes/s, smoothed), to judge whether a read
 	// ahead is worth a window.
 	rate     float64
@@ -123,6 +130,35 @@ type vodDownload struct {
 
 func newVODDownload(dest string) *vodDownload {
 	return &vodDownload{part: dest + ".part", dest: dest, changed: make(chan struct{}), wake: make(chan struct{}, 1)}
+}
+
+// vodReaderGrace keeps a download in the foreground for a moment after its
+// last reader left, so a player reconnecting (a seek, a retry) does not lose
+// the provider connection in between.
+var vodReaderGrace = 5 * time.Second
+
+// addReader and removeReader track the requests served from the download.
+func (d *vodDownload) addReader() {
+	d.mu.Lock()
+	d.readers++
+	d.mu.Unlock()
+}
+
+func (d *vodDownload) removeReader() {
+	d.mu.Lock()
+	d.readers--
+	d.lastReaderAt = time.Now()
+	d.mu.Unlock()
+}
+
+// foreground reports whether someone is watching through this download (see
+// vodReaderGrace). Downloads nobody watches (an item the viewer left, an
+// explicit /cache request) are in the background and give way to what is
+// watched when the provider's connections are all in use.
+func (d *vodDownload) foreground() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.readers > 0 || (!d.lastReaderAt.IsZero() && time.Since(d.lastReaderAt) < vodReaderGrace)
 }
 
 // notifyLocked wakes every waiter. The caller holds d.mu.
@@ -274,6 +310,17 @@ func (d *vodDownload) nextWindow() (byteSpan, bool) {
 	return byteSpan{}, false
 }
 
+// requeueWindow puts back a window whose fetch was abandoned (not failed), so
+// it is fetched first when the download resumes.
+func (d *vodDownload) requeueWindow(w byteSpan) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.noWindows {
+		return
+	}
+	d.wanted = append([]byteSpan{w}, d.wanted...)
+}
+
 // addWindow records that [start, end) has been written to the .part file.
 func (d *vodDownload) addWindow(start, end int64) {
 	d.mu.Lock()
@@ -387,6 +434,8 @@ func (d *vodDownload) openForRead() (*os.File, error) {
 // serveLocalFileRange.
 func (c *Config) serveVODDownload(ctx *gin.Context, dl *vodDownload, label, filename string, asAttachment bool) {
 	reqCtx := ctx.Request.Context()
+	dl.addReader()
+	defer dl.removeReader()
 	contentType := contentTypeForPath(dl.dest)
 
 	// Wait for the provider's answer, which carries the total size.

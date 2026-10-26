@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lucasduport/stream-share/pkg/provider"
 	"github.com/lucasduport/stream-share/pkg/types"
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
@@ -86,8 +87,42 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 	lastUpdate := time.Now()
 	completed := false
 
-	// attempt counts failures only: pausing for a window (see fetchWindows) is
-	// not one, and the sequential download resumes right after it.
+	// The provider connection is held through a slot (see provider.Arbiter):
+	// when what someone watches needs it and this download has no viewer, the
+	// download is paused (its connection closed), waits for a slot and
+	// resumes where it stopped.
+	label := "download of " + vodCachedLabel(streamID)
+	var lease *provider.Lease
+	slotMode := provider.Fresh
+	parked := false
+	release := func() {
+		if lease != nil {
+			lease.Release()
+			lease = nil
+		}
+	}
+	defer release()
+	acquire := func() bool {
+		if lease != nil && !lease.IsPreempted() {
+			return true
+		}
+		release()
+		l, aErr := c.providerSlots.Acquire(ctx, label, dl.foreground, slotMode)
+		if aErr != nil {
+			return false
+		}
+		if parked {
+			utils.InfoLog("Provider slot: resuming %s at %s/%s", label, utils.HumanBytes(downloaded), utils.HumanBytes(total))
+			parked = false
+		}
+		slotMode = provider.Resume
+		lease = l
+		return true
+	}
+
+	// attempt counts failures only: pausing for a window (see fetchWindows)
+	// or for another connection (a preempted slot) is not one, and the
+	// sequential download resumes right after it.
 	attempt := 0
 	retrying := false
 	for attempt <= maxCacheRetries {
@@ -98,13 +133,28 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 			backoff := time.Duration(attempt) * vodCacheRetryBackoff
 			utils.WarnLog("Cache: connection interrupted at %s/%s, retrying in %s (attempt %d/%d)",
 				utils.HumanBytes(downloaded), utils.HumanBytes(total), backoff, attempt, maxCacheRetries)
-			time.Sleep(backoff)
+			var preempt <-chan struct{}
+			if lease != nil {
+				preempt = lease.Preempted()
+			}
+			select {
+			case <-time.After(backoff):
+			case <-preempt: // give the slot back now rather than after the wait
+			case <-ctx.Done():
+			}
 		}
 		retrying = false
+		if !acquire() {
+			break
+		}
 		// Out-of-order reads waiting on this download come first; then the
 		// sequential download resumes where it stopped.
 		if total > 0 {
-			c.fetchWindows(ctx, dl, f, upstream, total)
+			c.fetchWindows(ctx, dl, f, upstream, total, lease)
+			if lease.IsPreempted() {
+				parked = true
+				continue
+			}
 		}
 		// Seek file to current offset so we append correctly on resume
 		if _, seekErr := f.Seek(downloaded, io.SeekStart); seekErr != nil {
@@ -193,11 +243,16 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 		// provider allows one connection, so this one is closed first.
 		var preempted atomic.Bool
 		watchDone := make(chan struct{})
+		slot := lease.Preempted()
 		go func() {
 			minRun := time.NewTimer(vodWindowMainRun)
 			defer minRun.Stop()
 			select {
 			case <-minRun.C:
+			case <-slot: // the slot is wanted: no minimum run
+				preempted.Store(true)
+				cancelAttempt()
+				return
 			case <-watchDone:
 				return
 			}
@@ -209,6 +264,10 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 				}
 				select {
 				case <-dl.wake:
+				case <-slot:
+					preempted.Store(true)
+					cancelAttempt()
+					return
 				case <-watchDone:
 					return
 				}
@@ -257,7 +316,10 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 			break
 		}
 		if preempted.Load() && ctx.Err() == nil {
-			continue // paused for a window, not a failure
+			if lease.IsPreempted() {
+				parked = true // the slot went to a watched stream; wait for another
+			}
+			continue // paused for a window or for another connection, not a failure
 		}
 		// io.ErrUnexpectedEOF or other transient errors: log and retry
 		utils.WarnLog("Cache: read interrupted at %s/%s: %v", utils.HumanBytes(downloaded), utils.HumanBytes(total), readErr)
@@ -313,13 +375,31 @@ var errRangeIgnored = errors.New("provider ignored the Range header")
 // offsets. Readers are woken as the bytes land. A provider that ignores Range
 // disables windows for this download; other failures are counted and retried
 // on the readers' next request, up to vodWindowMaxFailures.
-func (c *Config) fetchWindows(ctx context.Context, dl *vodDownload, f *os.File, upstream string, total int64) {
-	for ctx.Err() == nil {
+//
+// A window being fetched when the slot is preempted is abandoned without
+// counting as a failure; readers ask for it again.
+func (c *Config) fetchWindows(ctx context.Context, dl *vodDownload, f *os.File, upstream string, total int64, lease *provider.Lease) {
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-lease.Preempted():
+			cancel()
+		case <-stop:
+		}
+	}()
+	for wctx.Err() == nil {
 		w, ok := dl.nextWindow()
 		if !ok {
 			return
 		}
-		err := fetchWindow(ctx, dl, f, upstream, w, total)
+		err := fetchWindow(wctx, dl, f, upstream, w, total)
+		if err != nil && lease.IsPreempted() {
+			dl.requeueWindow(w) // fetched once the download has a slot again
+			return
+		}
 		if err != nil {
 			utils.WarnLog("Cache: out-of-order fetch of bytes %d-%d failed: %v", w.start, w.end-1, err)
 			dl.windowFailed(errors.Is(err, errRangeIgnored))

@@ -26,6 +26,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/lucasduport/stream-share/pkg/provider"
 	"github.com/lucasduport/stream-share/pkg/slate"
 	"github.com/lucasduport/stream-share/pkg/utils"
 )
@@ -47,6 +48,11 @@ const (
 
 // SetSlateProvider attaches the renderer used for upstream-failure slates.
 func (sm *SessionManager) SetSlateProvider(p SlateProvider) { sm.slateProvider = p }
+
+// SetProviderSlots shares the provider connection arbiter with the session
+// manager, so live streams and VOD cache downloads never hold more provider
+// connections than the account allows (see provider.Arbiter).
+func (sm *SessionManager) SetProviderSlots(a *provider.Arbiter) { sm.providerSlots = a }
 
 // SetErrorCatalog attaches the code -> message catalog used to build slates.
 func (sm *SessionManager) SetErrorCatalog(c *Catalog) { sm.errorCatalog = c }

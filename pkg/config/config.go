@@ -150,6 +150,14 @@ type ProxyConfig struct {
 	// already generous; raise it to make provider traffic even rarer.
 	ProviderInfoRefreshMinutes int
 
+	// ProviderMaxConnections caps the media connections stream-share opens to
+	// the provider at once (live streams, VOD cache downloads, direct VOD
+	// proxying). When full, what someone is watching preempts downloads nobody
+	// watches any more, which pause and resume later. 0 (default) uses the
+	// limit the provider reports (max_connections) and no limit while it is
+	// unknown; a positive value forces a limit; -1 disables arbitration.
+	ProviderMaxConnections int
+
 	// StreamTechProbeEnabled turns on best-effort audio/video technical info
 	// (codec, resolution, bitrate, ...) for active live streams, exposed via the
 	// dashboard API. It samples bytes already flowing through the existing
