@@ -20,6 +20,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lucasduport/stream-share/pkg/types"
@@ -84,22 +86,33 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 	lastUpdate := time.Now()
 	completed := false
 
-	for attempt := 0; attempt <= maxCacheRetries; attempt++ {
+	// attempt counts failures only: pausing for a window (see fetchWindows) is
+	// not one, and the sequential download resumes right after it.
+	attempt := 0
+	retrying := false
+	for attempt <= maxCacheRetries {
 		if ctx.Err() != nil {
 			break
 		}
-		if attempt > 0 {
+		if retrying {
 			backoff := time.Duration(attempt) * vodCacheRetryBackoff
 			utils.WarnLog("Cache: connection interrupted at %s/%s, retrying in %s (attempt %d/%d)",
 				utils.HumanBytes(downloaded), utils.HumanBytes(total), backoff, attempt, maxCacheRetries)
 			time.Sleep(backoff)
-			// Seek file to current offset so we append correctly on resume
-			if _, seekErr := f.Seek(downloaded, io.SeekStart); seekErr != nil {
-				utils.ErrorLog("Cache: seek error: %v", seekErr)
-				c.cacheFail(streamID)
-				return
-			}
 		}
+		retrying = false
+		// Out-of-order reads waiting on this download come first; then the
+		// sequential download resumes where it stopped.
+		if total > 0 {
+			c.fetchWindows(ctx, dl, f, upstream, total)
+		}
+		// Seek file to current offset so we append correctly on resume
+		if _, seekErr := f.Seek(downloaded, io.SeekStart); seekErr != nil {
+			utils.ErrorLog("Cache: seek error: %v", seekErr)
+			c.cacheFail(streamID)
+			return
+		}
+		dl.resumeSequential()
 
 		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		req, reqErr := http.NewRequestWithContext(attemptCtx, "GET", upstream, nil)
@@ -118,6 +131,8 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 		if doErr != nil {
 			cancelAttempt()
 			utils.WarnLog("Cache: upstream error (attempt %d): %v", attempt, doErr)
+			attempt++
+			retrying = true
 			continue
 		}
 
@@ -167,9 +182,38 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 			cancelAttempt()
 			_ = resp.Body.Close()
 			utils.WarnLog("Cache: upstream status %d (attempt %d)", resp.StatusCode, attempt)
+			attempt++
+			retrying = true
 			continue
 		}
 		dl.setTotal(total)
+
+		// A reader asking for a window pauses this attempt (after a short
+		// minimum run, so the sequential download always progresses): the
+		// provider allows one connection, so this one is closed first.
+		var preempted atomic.Bool
+		watchDone := make(chan struct{})
+		go func() {
+			minRun := time.NewTimer(vodWindowMainRun)
+			defer minRun.Stop()
+			select {
+			case <-minRun.C:
+			case <-watchDone:
+				return
+			}
+			for {
+				if dl.windowWanted() {
+					preempted.Store(true)
+					cancelAttempt()
+					return
+				}
+				select {
+				case <-dl.wake:
+				case <-watchDone:
+					return
+				}
+			}
+		}()
 
 		// Written straight to the file (no buffering) and published right
 		// after, so readers of the file see every counted byte.
@@ -182,6 +226,7 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 			if nr > 0 {
 				if _, ew := f.Write(buf[:nr]); ew != nil {
 					stall.Stop()
+					close(watchDone)
 					cancelAttempt()
 					_ = resp.Body.Close()
 					utils.ErrorLog("Cache: write error: %v", ew)
@@ -203,6 +248,7 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 			}
 		}
 		stall.Stop()
+		close(watchDone)
 		cancelAttempt()
 		_ = resp.Body.Close()
 
@@ -210,8 +256,13 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 			completed = true
 			break
 		}
+		if preempted.Load() && ctx.Err() == nil {
+			continue // paused for a window, not a failure
+		}
 		// io.ErrUnexpectedEOF or other transient errors: log and retry
 		utils.WarnLog("Cache: read interrupted at %s/%s: %v", utils.HumanBytes(downloaded), utils.HumanBytes(total), readErr)
+		attempt++
+		retrying = true
 	}
 
 	if !completed {
@@ -251,6 +302,89 @@ func (c *Config) fetchToFile(ctx context.Context, dl *vodDownload, upstream, des
 		}
 		_ = c.db.UpsertVODCache(entry)
 	}
+}
+
+// errRangeIgnored reports a provider answering a ranged request with the whole
+// file (200).
+var errRangeIgnored = errors.New("provider ignored the Range header")
+
+// fetchWindows fetches every window readers are waiting for (see
+// vodDownload.requestWindow), one ranged request at a time, into f at their
+// offsets. Readers are woken as the bytes land. A provider that ignores Range
+// disables windows for this download; other failures are counted and retried
+// on the readers' next request, up to vodWindowMaxFailures.
+func (c *Config) fetchWindows(ctx context.Context, dl *vodDownload, f *os.File, upstream string, total int64) {
+	for ctx.Err() == nil {
+		w, ok := dl.nextWindow()
+		if !ok {
+			return
+		}
+		err := fetchWindow(ctx, dl, f, upstream, w, total)
+		if err != nil {
+			utils.WarnLog("Cache: out-of-order fetch of bytes %d-%d failed: %v", w.start, w.end-1, err)
+			dl.windowFailed(errors.Is(err, errRangeIgnored))
+			continue
+		}
+		utils.DebugLog("Cache: fetched bytes %d-%d ahead of the download for %s", w.start, w.end-1, utils.MaskURL(upstream))
+	}
+}
+
+// fetchWindow fetches w with a ranged request and writes it at its offset.
+func fetchWindow(ctx context.Context, dl *vodDownload, f *os.File, upstream string, w byteSpan, total int64) error {
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", upstream, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", utils.GetIPTVUserAgent())
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", w.start, w.end-1))
+	resp, err := vodCacheClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+	case http.StatusOK:
+		return errRangeIgnored
+	default:
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	// The answer must start where asked; anything else cannot be placed.
+	if cr := resp.Header.Get("Content-Range"); !strings.HasPrefix(cr, fmt.Sprintf("bytes %d-", w.start)) {
+		return fmt.Errorf("unexpected Content-Range %q", cr)
+	}
+
+	stall := time.AfterFunc(vodCacheStallTimeout, cancel)
+	defer stall.Stop()
+	body := &stallReader{r: resp.Body, timer: stall, idle: vodCacheStallTimeout}
+	buf := make([]byte, 256*1024)
+	off := w.start
+	for off < w.end {
+		n := int64(len(buf))
+		if rest := w.end - off; rest < n {
+			n = rest
+		}
+		nr, er := body.Read(buf[:n])
+		if nr > 0 {
+			if _, ew := f.WriteAt(buf[:nr], off); ew != nil {
+				return ew
+			}
+			dl.addWindow(w.start, off+int64(nr))
+			off += int64(nr)
+		}
+		if er != nil {
+			if er == io.EOF && off >= w.end {
+				break
+			}
+			if er == io.EOF && off >= total {
+				break
+			}
+			return er
+		}
+	}
+	return nil
 }
 
 // vodTouchInterval throttles last_access updates for a cached VOD item.

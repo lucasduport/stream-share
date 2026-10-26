@@ -148,6 +148,9 @@ func (c *Config) stream(ctx *gin.Context, oriURL *url.URL) {
 
 	// Copy response headers and status code
 	mergeHttpHeader(ctx.Writer.Header(), resp.Header)
+	if isVOD {
+		mediaNoStore(ctx.Writer.Header())
+	}
 	status := resp.StatusCode
 	// If the client did not send a Range header but upstream returned 206, the player
 	// will get confused (it expected 200) and immediately drop the connection.
