@@ -418,6 +418,7 @@ func (c *Config) serveVODDownload(ctx *gin.Context, dl *vodDownload, label, file
 	h := ctx.Writer.Header()
 	h.Set("Content-Type", contentType)
 	h.Set("X-Accel-Buffering", "no")
+	mediaNoStore(h)
 	if asAttachment {
 		if filename == "" {
 			filename = path.Base(dl.dest)

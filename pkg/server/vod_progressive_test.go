@@ -516,3 +516,37 @@ func BenchmarkProgressiveRead(b *testing.B) {
 		run(b, func(ctx *gin.Context) { serveLocalFileRange(ctx, dest, "video/x-matroska", "", false) })
 	})
 }
+
+// Every VOD response says "no-store": a CDN caching by file extension would
+// otherwise fetch the whole file to fill its cache and make a player's Range
+// requests wait for that fill, defeating progressive serving.
+func TestVODResponsesAreNotStoredByIntermediaries(t *testing.T) {
+	p := &fakeVODProvider{data: randomBytes(t, 2<<20), chunk: 64 << 10, delay: 2 * time.Millisecond}
+	c, _, front := progressiveTestServer(t, p, true)
+
+	resp, _, err := getRange(t, front.URL+"/series/101.mkv", "bytes=0-1023")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("in-progress response Cache-Control = %q, want no-store", got)
+	}
+	waitDownloadDone(t, c, "101")
+
+	resp, _, err = getRange(t, front.URL+"/series/101.mkv", "bytes=0-1023")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cached-file response Cache-Control = %q, want no-store", got)
+	}
+
+	_, _, direct := progressiveTestServer(t, p, false)
+	resp, _, err = getRange(t, direct.URL+"/series/102.mkv", "bytes=0-1023")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("direct-proxy response Cache-Control = %q, want no-store", got)
+	}
+}

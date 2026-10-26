@@ -98,6 +98,16 @@ func contentTypeForPath(p string) string {
 	}
 }
 
+// mediaNoStore marks a media response as not to be stored by intermediaries.
+// A caching CDN in front of the server (e.g. one that caches .mkv/.mp4 by
+// extension) otherwise turns a player's Range request into a full-object fetch
+// from this server and makes the player wait for the CDN to fill its cache up
+// to the requested bytes, which defeats progressive serving and seeking. The
+// URLs also embed viewer credentials, which must not key a shared cache.
+func mediaNoStore(h http.Header) {
+	h.Set("Cache-Control", "no-store")
+}
+
 // setNoBufferingHeaders configures common headers to minimize intermediary
 // buffering and keep the connection alive during long-running streams.
 func setNoBufferingHeaders(ctx *gin.Context, contentType string) {
@@ -177,6 +187,7 @@ func serveLocalFileRange(ctx *gin.Context, filePath string, contentType string, 
 		ctx.Header("Content-Type", contentType)
 	}
 	ctx.Header("X-Accel-Buffering", "no")
+	mediaNoStore(ctx.Writer.Header())
 	if asAttachment {
 		if filename == "" {
 			filename = path.Base(filePath)
