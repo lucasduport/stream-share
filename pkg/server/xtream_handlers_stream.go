@@ -339,10 +339,11 @@ func (c *Config) streamFileSegment(ctx *gin.Context, filePath string, startOffse
 
 // streamVODWithCache serves a movie or series request, transparently caching
 // it to local disk on first access. When a ready cache entry exists it serves
-// the local file; otherwise it starts a background download and proxies to the
-// upstream so the client gets immediate playback while caching proceeds in
-// parallel. When caching is disabled or no database is configured the request
-// is proxied directly to upstream via c.stream.
+// the local file; otherwise it starts (or joins) the background download and
+// serves the player from the file as it is written, so the download is the
+// only provider connection for it (see serveVODDownload). When caching is
+// disabled or no database is configured the request is proxied directly to
+// upstream via c.stream.
 //
 // A synthetic VOD view is always registered with the session manager so that
 // /status and watch history reflect the playback regardless of the serving
@@ -373,24 +374,18 @@ func (c *Config) streamVODWithCache(ctx *gin.Context, basePath, defaultExt strin
 			}
 		}
 
-		// Not cached yet: auto-start 7-day caching in the background.
+		// Not cached yet: auto-start 7-day caching in the background (or join
+		// the download already running) and serve the player from it. A
+		// second, direct provider connection for the same file would make a
+		// one-connection provider cut the download, and vice versa.
 		upstream, dest, _ := c.resolveVODCacheURL(basePath, defaultExt, id)
 		expires := time.Now().Add(7 * 24 * time.Hour)
-		if err := c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: basePath, FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()}); err != nil {
-			utils.ErrorLog("Failed to record %s cache entry for %s: %v", basePath, idRaw, err)
-		}
-		c.startBackgroundDownload(upstream, dest, idRaw, basePath, expires)
-
-		// Proxy to upstream directly: lets the IPTV server handle Content-Length,
-		// Content-Range, and Range seeks natively. This avoids avformat errors
-		// (MP4 moov at EOF) and seek loops. Background caching continues
-		// independently; once complete, future requests serve from the local file.
-		upstreamURL, upstreamErr := url.Parse(upstream)
-		if upstreamErr != nil {
-			_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(upstreamErr))
-			return
-		}
-		c.stream(ctx, upstreamURL)
+		dl := c.startBackgroundDownload(upstream, dest, idRaw, basePath, expires, func() {
+			if err := c.db.UpsertVODCache(&types.VODCacheEntry{StreamID: idRaw, Type: basePath, FilePath: dest, Status: "downloading", ExpiresAt: expires, CreatedAt: time.Now()}); err != nil {
+				utils.ErrorLog("Failed to record %s cache entry for %s: %v", basePath, idRaw, err)
+			}
+		})
+		c.serveVODDownload(ctx, dl, vodCachedLabel(idRaw), "", false)
 		return
 	}
 

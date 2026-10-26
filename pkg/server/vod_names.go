@@ -49,6 +49,16 @@ func vodNameCached(streamID string) (string, bool) {
 	return name, ok && name != ""
 }
 
+// vodCachedLabel is vodLabel without network I/O: the cached title if any.
+// For per-request paths (a playback issues many Range requests).
+func vodCachedLabel(streamID string) string {
+	id := normalizeStreamID(streamID)
+	if name, ok := vodNameCached(streamID); ok {
+		return fmt.Sprintf("%s (Stream %s)", strings.TrimSpace(name), id)
+	}
+	return fmt.Sprintf("Stream %s", id)
+}
+
 // vodTitleByID lazily resolves a movie title via get_vod_info, caching the
 // result (including confirmed misses). It performs a network call on a cache
 // miss, so it must NOT be called while holding a lock the stream hot path needs.

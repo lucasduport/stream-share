@@ -19,7 +19,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -449,7 +448,8 @@ func (c *Config) startCache(ctx *gin.Context) {
 				_ = c.db.SetVODCacheTitle(req.StreamID, strings.TrimSpace(tt))
 			}
 		}
-		c.fetchToFile(context.Background(), upstream, filename, req.StreamID, basePath, expires)
+		// Shared with any playback of the same item already downloading it.
+		c.startBackgroundDownload(upstream, filename, req.StreamID, basePath, expires, nil)
 	}()
 
 	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: map[string]interface{}{

@@ -94,7 +94,8 @@ type Config struct {
 	// apply to this deployment (plain M3U) and the endpoint reports so.
 	providerInfo *providerInfoState
 
-	// inProgressDownloads guards against concurrent duplicate fetchToFile goroutines
+	// inProgressDownloads holds the running VOD cache downloads (stream ID ->
+	// *vodDownload): one per item, shared by every request served from it.
 	inProgressDownloads sync.Map
 
 	// catalogFilter is the compiled catalogue filter; nil keeps everything, and
@@ -662,9 +663,10 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 			return
 		}
 
-		// Cache miss: when VOD caching is enabled, start a background download so
-		// future requests (including downloads) serve from local disk instead of
-		// hitting upstream again. This realizes the "always cache" policy.
+		// Cache miss: when VOD caching is enabled, start (or join) the
+		// background download and serve this download from it, so future
+		// requests serve from local disk and this one opens no second provider
+		// connection. This realizes the "always cache" policy.
 		if c.VODCacheEnabled {
 			defaultExt := ".mp4"
 			if basePath == "series" {
@@ -672,7 +674,9 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 			}
 			upstream, dest, _ := c.resolveVODCacheURL(basePath, defaultExt, tempLink.StreamID)
 			expires := time.Now().Add(7 * 24 * time.Hour)
-			c.startBackgroundDownload(upstream, dest, idRaw, basePath, expires)
+			dl := c.startBackgroundDownload(upstream, dest, idRaw, basePath, expires, nil)
+			c.serveVODDownload(ctx, dl, vodCachedLabel(idRaw), sanitiseFilename(tempLink.Title)+path.Ext(dest), true)
+			return
 		}
 	}
 
