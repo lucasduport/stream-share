@@ -72,7 +72,7 @@ services:
 
       # Discord Bot Configuration
       DISCORD_BOT_TOKEN: ""            # Discord bot token
-      DISCORD_ADMIN_ROLE_ID: ""        # Discord role ID for admin commands
+      DISCORD_ADMIN_ROLE_ID: ""        # Discord role ID for admin commands (unset: members with Manage Server)
       DISCORD_API_URL: ""              # API URL for Discord bot (defaults to hostname)
 
       # Dashboard Configuration

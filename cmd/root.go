@@ -319,7 +319,7 @@ func init() {
 	// Internal API / Discord configuration
 	rootCmd.Flags().String("internal-api-key", "", "Internal API key (generated at startup if unset)")
 	rootCmd.Flags().String("discord-bot-token", "", "Discord bot token (enables the Discord bot when set)")
-	rootCmd.Flags().String("discord-admin-role-id", "", "Discord admin role ID")
+	rootCmd.Flags().String("discord-admin-role-id", "", "Discord role ID for admin commands (unset: members with Manage Server or Administrator)")
 	rootCmd.Flags().String("discord-api-url", "", "Base URL the Discord bot uses to reach this API")
 
 	// Dashboard configuration
