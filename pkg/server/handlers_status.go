@@ -86,8 +86,8 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 					viewerNames = append(viewerNames, v.ID)
 				}
 			}
-			fmt.Fprintf(&b, "- %s%s [%s] — %d viewer(s): %s (since %s)\n",
-				title, epgSuffix, it.StreamType, it.ViewerCount, strings.Join(viewerNames, ", "), it.Duration,
+			fmt.Fprintf(&b, "- %s %s%s [%s] — %d viewer(s): %s (since %s)\n",
+				title, streamRef(it), epgSuffix, it.StreamType, it.ViewerCount, strings.Join(viewerNames, ", "), it.Duration,
 			)
 			if tech := formatTechSummary(it.Tech); tech != "" {
 				fmt.Fprintf(&b, "  %s\n", tech)
