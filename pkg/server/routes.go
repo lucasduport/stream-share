@@ -20,7 +20,9 @@ package server
 
 import (
 	"fmt"
+	"net/http"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -34,10 +36,7 @@ func (c *Config) routes(r *gin.RouterGroup) {
 	// Xtream service endpoints
 	if c.XtreamBaseURL != "" {
 		c.xtreamRoutes(r)
-		if strings.Contains(c.XtreamBaseURL, c.RemoteURL.Host) &&
-			c.XtreamUser.String() == c.RemoteURL.Query().Get("username") &&
-			c.XtreamPassword.String() == c.RemoteURL.Query().Get("password") {
-
+		if c.xtreamServesM3U() {
 			r.GET("/"+c.M3UFileName, c.authenticate, c.xtreamGetAuto)
 			// XXX Private need: for external Android app
 			r.POST("/"+c.M3UFileName, c.authenticate, c.xtreamGetAuto)
@@ -47,6 +46,20 @@ func (c *Config) routes(r *gin.RouterGroup) {
 	}
 
 	c.m3uRoutes(r)
+}
+
+// xtreamServesM3U reports whether M3U_URL is the Xtream account's own get.php,
+// in which case the playlist is answered by the Xtream get.php proxy (streamed
+// and cached on disk) and the M3U_URL playlist is never served as such — so it
+// must not be downloaded and parsed into memory at boot either.
+func (c *Config) xtreamServesM3U() bool {
+	if c.XtreamBaseURL == "" || c.RemoteURL == nil {
+		return false
+	}
+	q := c.RemoteURL.Query()
+	return strings.Contains(c.XtreamBaseURL, c.RemoteURL.Host) &&
+		c.XtreamUser.String() == q.Get("username") &&
+		c.XtreamPassword.String() == q.Get("password")
 }
 
 // xtreamRoutes registers endpoints backed by an Xtream provider.
@@ -77,16 +90,39 @@ func (c *Config) m3uRoutes(r *gin.RouterGroup) {
 	// XXX Private need: for external Android app
 	r.POST("/"+c.M3UFileName, c.authenticate, c.getM3U)
 
-	for i, track := range c.playlist.Tracks {
-		trackConfig := &Config{
-			ProxyConfig: c.ProxyConfig,
-			track:       &c.playlist.Tracks[i],
-		}
-
-		if strings.HasSuffix(track.URI, ".m3u8") {
-			r.GET(fmt.Sprintf("/%s/%s/%s/%d/:id", c.endpointAntiColision, c.XtreamUser.String(), c.XtreamPassword.String(), i), trackConfig.m3u8ReverseProxy)
-		} else {
-			r.GET(fmt.Sprintf("/%s/%s/%s/%d/%s", c.endpointAntiColision, c.XtreamUser.String(), c.XtreamPassword.String(), i, path.Base(track.URI)), trackConfig.reverseProxy)
-		}
+	if len(c.playlist.Tracks) == 0 {
+		return
 	}
+	// One route for every track, dispatched by index. Registering a route per
+	// track cost an allocation and a radix-tree node each, which on a
+	// million-track playlist meant minutes of boot and hundreds of MB.
+	r.GET(fmt.Sprintf("/%s/%s/%s/:track/*file", c.endpointAntiColision, c.XtreamUser.String(), c.XtreamPassword.String()), c.trackProxy)
+}
+
+// trackProxy serves /<anti-collision>/<user>/<pass>/<index>/<file> for the
+// proxified M3U: the index selects the track, and the file must be the
+// track's own file name (or, for an HLS track, any single segment name).
+func (c *Config) trackProxy(ctx *gin.Context) {
+	i, err := strconv.Atoi(ctx.Param("track"))
+	if err != nil || i < 0 || i >= len(c.playlist.Tracks) {
+		ctx.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	track := &c.playlist.Tracks[i]
+	file := strings.TrimPrefix(ctx.Param("file"), "/")
+	trackConfig := &Config{ProxyConfig: c.ProxyConfig, track: track}
+	if strings.HasSuffix(track.URI, ".m3u8") {
+		if file == "" || strings.Contains(file, "/") {
+			ctx.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		ctx.Params = append(ctx.Params, gin.Param{Key: "id", Value: file})
+		trackConfig.m3u8ReverseProxy(ctx)
+		return
+	}
+	if file != path.Base(track.URI) {
+		ctx.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	trackConfig.reverseProxy(ctx)
 }

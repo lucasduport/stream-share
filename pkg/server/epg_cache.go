@@ -93,8 +93,7 @@ func (c *Config) xtreamXMLTV(ctx *gin.Context) {
 	if c.catalogFilter != nil {
 		p = c.filteredEPGPath(p)
 	}
-	ctx.Header("Content-Type", "application/xml")
-	ctx.File(p)
+	serveFileCompressed(ctx, p, "application/xml")
 }
 
 // ensureEPGCache starts a background guide download when the cached guide is

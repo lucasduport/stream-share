@@ -54,8 +54,7 @@ var streamHTTPClient = &http.Client{Transport: streamTransport}
 // getM3U sends the proxified M3U file generated during bootstrap.
 func (c *Config) getM3U(ctx *gin.Context) {
 	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))
-	ctx.Header("Content-Type", "application/octet-stream")
-	ctx.File(c.proxyfiedM3UPath)
+	serveFileCompressed(ctx, c.proxyfiedM3UPath, "application/octet-stream")
 }
 
 // reverseProxy forwards a track request to the upstream using Xtream creds.

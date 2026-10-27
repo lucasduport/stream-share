@@ -20,6 +20,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,7 +39,6 @@ import (
 	"github.com/lucasduport/stream-share/pkg/config"
 	"github.com/lucasduport/stream-share/pkg/utils"
 	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
-	uuid "github.com/satori/go.uuid"
 )
 
 // xtreamGetAuto forwards get.php with non-credential query params preserved.
@@ -54,16 +55,100 @@ func (c *Config) xtreamGetAuto(ctx *gin.Context) {
 	c.xtreamGet(ctx)
 }
 
-// xtreamGetRefreshMu serialises get.php M3U refreshes (see xtreamGet).
-var xtreamGetRefreshMu sync.Mutex
+// getPHPFailBackoff is how long a failed get.php refresh is remembered before
+// another may start while a previous copy is still being served: on slow
+// providers each attempt is minutes of bandwidth.
+const getPHPFailBackoff = 5 * time.Minute
 
-// xtreamM3uFresh reports whether cacheKey has a cached M3U younger than the
-// configured expiration.
-func (c *Config) xtreamM3uFresh(cacheKey string) bool {
+// getPHPFetch is one in-flight get.php refresh; done closes when it ends.
+type getPHPFetch struct {
+	done chan struct{}
+	err  error
+}
+
+var (
+	getPHPMu       sync.Mutex
+	getPHPInFlight = map[string]*getPHPFetch{} // cache key -> running refresh
+	getPHPFailedAt = map[string]time.Time{}    // cache key -> last failed refresh
+)
+
+// getPHPCachePath is where the rewritten get.php answer for cacheKey lives. It
+// is stable across restarts (unlike a random temp file), so a restart serves
+// the last playlist instead of making the first player wait for a full
+// download.
+func getPHPCachePath(cacheKey string) string {
+	sum := sha256.Sum256([]byte(cacheKey))
+	return filepath.Join(utils.CacheRoot(), "m3u", "get-"+hex.EncodeToString(sum[:8])+".m3u")
+}
+
+// xtreamM3uCached returns the cached get.php file for cacheKey and whether it
+// is younger than the configured expiration. A file left by a previous run is
+// adopted on first use. path is empty when nothing is cached.
+func (c *Config) xtreamM3uCached(cacheKey string) (path string, fresh bool) {
 	xtreamM3uCacheLock.RLock()
-	defer xtreamM3uCacheLock.RUnlock()
 	meta, ok := xtreamM3uCache[cacheKey]
-	return ok && time.Since(meta.Time).Hours() < float64(c.M3UCacheExpiration)
+	xtreamM3uCacheLock.RUnlock()
+	if !ok {
+		p := getPHPCachePath(cacheKey)
+		info, err := os.Stat(p)
+		if err != nil {
+			return "", false
+		}
+		meta = cacheMeta{p, info.ModTime()}
+		xtreamM3uCacheLock.Lock()
+		if cur, exists := xtreamM3uCache[cacheKey]; exists {
+			meta = cur
+		} else {
+			xtreamM3uCache[cacheKey] = meta
+		}
+		xtreamM3uCacheLock.Unlock()
+	}
+	return meta.string, time.Since(meta.Time).Hours() < float64(c.M3UCacheExpiration)
+}
+
+// startGetPHPRefresh starts a background get.php download for cacheKey unless
+// one is already running, in which case that one is returned, so concurrent
+// players share a single provider download. With hasCopy set (a previous
+// playlist is being served meanwhile) it returns nil while a recent failure is
+// in backoff.
+func (c *Config) startGetPHPRefresh(cacheKey, rawURL string, hasCopy bool) *getPHPFetch {
+	getPHPMu.Lock()
+	defer getPHPMu.Unlock()
+	if f := getPHPInFlight[cacheKey]; f != nil {
+		return f
+	}
+	if hasCopy && time.Since(getPHPFailedAt[cacheKey]) < getPHPFailBackoff {
+		return nil
+	}
+	f := &getPHPFetch{done: make(chan struct{})}
+	getPHPInFlight[cacheKey] = f
+	go func() {
+		dest := getPHPCachePath(cacheKey)
+		tracks, err := c.fetchAndRewriteXtreamM3U(rawURL, dest)
+		if err == nil && tracks == 0 {
+			err = fmt.Errorf("empty playlist returned by Xtream backend")
+		}
+		if err == nil {
+			xtreamM3uCacheLock.Lock()
+			xtreamM3uCache[cacheKey] = cacheMeta{dest, time.Now()}
+			xtreamM3uCacheLock.Unlock()
+			utils.DebugLog("Cached stream-rewritten Xtream M3U at %s (%d tracks)", dest, tracks)
+			c.shareGetPHPAsVODM3U(rawURL, dest)
+		} else {
+			utils.WarnLog("get.php refresh failed: %v", err)
+		}
+		getPHPMu.Lock()
+		delete(getPHPInFlight, cacheKey)
+		if err != nil {
+			getPHPFailedAt[cacheKey] = time.Now()
+		} else {
+			delete(getPHPFailedAt, cacheKey)
+		}
+		getPHPMu.Unlock()
+		f.err = err
+		close(f.done)
+	}()
+	return f
 }
 
 // xtreamGet proxies get.php, caching the M3U on disk and guarding empty results.
@@ -71,6 +156,11 @@ func (c *Config) xtreamM3uFresh(cacheKey string) bool {
 // replacement (constant memory), instead of being fully parsed into RAM via
 // m3u.Parse. On a 424 MB / 1.45M-track catalog this keeps peak RSS well under
 // 500 MB and removes the multi-minute parse from the first-fetch path.
+//
+// A cached playlist is always served at once, even past its expiration: the
+// refresh runs in the background (one per playlist variant) and replaces the
+// file atomically when complete. Only a player with nothing cached at all
+// waits for the download, and it stops waiting when it disconnects.
 func (c *Config) xtreamGet(ctx *gin.Context) {
 	utils.DebugLog("Xtream backend request: user=%s, baseURL=%s", c.XtreamUser.String(), c.XtreamBaseURL)
 
@@ -94,45 +184,31 @@ func (c *Config) xtreamGet(ctx *gin.Context) {
 	}
 	cacheKey := m3uURL.String()
 
-	if !c.xtreamM3uFresh(cacheKey) {
-		// One refresh at a time: on a big, slow provider every concurrent
-		// player would otherwise start its own multi-hundred-MB download.
-		// Waiters re-check freshness and reuse the leader's result.
-		xtreamGetRefreshMu.Lock()
-		if !c.xtreamM3uFresh(cacheKey) {
-			utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
-			// Stream-rewrite the provider M3U to a cache file without parsing
-			// it into RAM. The cache entry stores the rewritten file path.
-			cachePath := filepath.Join(os.TempDir(), uuid.NewV4().String()+".stream-share.m3u")
-			tracks, err := c.fetchAndRewriteXtreamM3U(rawURL, cachePath)
-			if err == nil && tracks == 0 {
-				err = fmt.Errorf("empty playlist returned by Xtream backend")
+	path, fresh := c.xtreamM3uCached(cacheKey)
+	if !fresh {
+		f := c.startGetPHPRefresh(cacheKey, rawURL, path != "")
+		if path != "" {
+			if f != nil {
+				utils.DebugLog("get.php: serving the cached playlist while it refreshes")
 			}
-			if err != nil {
-				xtreamGetRefreshMu.Unlock()
-				_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(err))
+		} else {
+			utils.InfoLog("xtream cache m3u file refresh requested by %s", ctx.ClientIP())
+			select {
+			case <-f.done:
+			case <-ctx.Request.Context().Done():
+				ctx.Abort() // client went away; the download carries on for the next one
 				return
 			}
-			xtreamM3uCacheLock.Lock()
-			old := xtreamM3uCache[cacheKey].string
-			xtreamM3uCache[cacheKey] = cacheMeta{cachePath, time.Now()}
-			xtreamM3uCacheLock.Unlock()
-			if old != "" && old != cachePath {
-				// Each refresh writes a new file; drop the previous one once
-				// in-flight responses have had time to open it.
-				time.AfterFunc(time.Minute, func() { _ = os.Remove(old) })
+			if f.err != nil {
+				_ = ctx.AbortWithError(http.StatusBadGateway, utils.PrintErrorAndReturn(f.err))
+				return
 			}
-			utils.DebugLog("Cached stream-rewritten Xtream M3U at %s for key %s (%d tracks)", cachePath, cacheKey, tracks)
+			path, _ = c.xtreamM3uCached(cacheKey)
 		}
-		xtreamGetRefreshMu.Unlock()
 	}
 
 	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, c.M3UFileName))
-	xtreamM3uCacheLock.RLock()
-	path := xtreamM3uCache[cacheKey].string
-	xtreamM3uCacheLock.RUnlock()
-	ctx.Header("Content-Type", "application/octet-stream")
-	ctx.File(path)
+	serveFileCompressed(ctx, path, "application/octet-stream")
 }
 
 // xtreamPlayerAPI proxies player_api actions with a local login path to avoid brittle unmarshaling differences.
@@ -194,8 +270,14 @@ func (c *Config) xtreamPlayerAPI(ctx *gin.Context, q url.Values) {
 		return
 	}
 
-	resp, httpcode, contentType, err := client.Action(c.ProxyConfig, action, q)
+	// Bound to the player's request: a player that gives up stops the call
+	// (and its retries) instead of leaving it running against the provider.
+	resp, httpcode, contentType, err := client.ActionContext(ctx.Request.Context(), c.ProxyConfig, action, q)
 	if err != nil {
+		if ctx.Request.Context().Err() != nil {
+			ctx.Abort()
+			return
+		}
 		_ = ctx.AbortWithError(httpcode, utils.PrintErrorAndReturn(err))
 		return
 	}
@@ -373,6 +455,14 @@ func (c *Config) servePlayerAPICatalog(ctx *gin.Context, action, key string, q u
 	if config.CacheFolder != "" && utils.IsDebugLogEnabled() {
 		filename := fmt.Sprintf("%s_%s.json", action, time.Now().Format("20060102_150405"))
 		utils.WriteResponseToFile(filename, body, "application/json")
+	}
+	ctx.Header("Vary", "Accept-Encoding")
+	if acceptsGzip(ctx.Request) {
+		if gz, gerr := catalogGzip(key, e, body); gerr == nil {
+			ctx.Header("Content-Encoding", "gzip")
+			ctx.Data(http.StatusOK, "application/json; charset=utf-8", gz)
+			return
+		}
 	}
 	ctx.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }

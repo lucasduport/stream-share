@@ -64,12 +64,13 @@ func (c *Config) filteredEPGPath(raw string) string {
 	if err != nil {
 		return raw
 	}
-	catsAt := int64(0)
-	if set.cats != nil {
-		catsAt = set.cats.fetchedAt.UnixNano()
-	}
-	dest := filepath.Join(filepath.Dir(raw), fmt.Sprintf("xmltv.%s.%d.%d.xml",
-		c.catalogFilter.Fingerprint(), info.ModTime().UnixNano(), set.src.fetchedAt.UnixNano()^catsAt))
+	// Named after what decides its content — the rules, the guide version and
+	// the set of kept channels — rather than when the live catalogue was
+	// fetched: the catalogue is refetched hourly, and naming the file after
+	// the fetch rebuilt the whole guide inside a player's request each time
+	// even though the kept channels had not changed.
+	dest := filepath.Join(filepath.Dir(raw), fmt.Sprintf("xmltv.%s.%d.%s.xml",
+		c.catalogFilter.Fingerprint(), info.ModTime().UnixNano(), set.epgKey()))
 	if _, err := os.Stat(dest); err == nil {
 		return dest
 	}
@@ -90,11 +91,13 @@ func (c *Config) filteredEPGPath(raw string) string {
 	return dest
 }
 
-// removeStaleFilteredEPGs deletes filtered guides other than keep.
+// removeStaleFilteredEPGs deletes filtered guides other than keep, with their
+// compressed siblings.
 func removeStaleFilteredEPGs(dir, keep string) {
-	matches, _ := filepath.Glob(filepath.Join(dir, "xmltv.*.*.*.xml"))
-	for _, m := range matches {
-		if m != keep {
+	matches, _ := filepath.Glob(filepath.Join(dir, "xmltv.*.*.xml"))
+	gz, _ := filepath.Glob(filepath.Join(dir, "xmltv.*.*.xml.gz"))
+	for _, m := range append(matches, gz...) {
+		if m != keep && m != keep+".gz" {
 			_ = os.Remove(m)
 		}
 	}

@@ -17,8 +17,11 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -197,6 +200,28 @@ type liveKeptSet struct {
 	cats   *catalogEntry
 	ids    map[string]bool
 	epgIDs map[string]bool
+
+	epgKeyOnce sync.Once
+	epgKeyVal  string
+}
+
+// epgKey fingerprints the kept EPG channel ids, computed once per set: two
+// sets with the same key keep the same guide channels.
+func (s *liveKeptSet) epgKey() string {
+	s.epgKeyOnce.Do(func() {
+		ids := make([]string, 0, len(s.epgIDs))
+		for id := range s.epgIDs {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		h := sha256.New()
+		for _, id := range ids {
+			h.Write([]byte(id))
+			h.Write([]byte{0})
+		}
+		s.epgKeyVal = hex.EncodeToString(h.Sum(nil)[:8])
+	})
+	return s.epgKeyVal
 }
 
 var (

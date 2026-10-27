@@ -112,14 +112,22 @@ type Config struct {
 func NewServer(config *config.ProxyConfig) (*Config, error) {
 	var p m3u.Playlist
 
-	// Parse the M3U playlist from the remote URL if provided
+	// Parse the M3U playlist from the remote URL if provided — unless it is the
+	// Xtream account's own get.php, which is then served by the streaming
+	// get.php proxy instead. Parsing it here would download the whole playlist
+	// before the server can start and keep every track in memory for nothing
+	// (about 1.3 GiB of heap and minutes of boot on a million-track catalogue).
 	if config.RemoteURL.String() != "" {
-		var err error
-		p, err = m3u.Parse(config.RemoteURL.String())
-		if err != nil {
-			return nil, utils.PrintErrorAndReturn(err)
+		if (&Config{ProxyConfig: config}).xtreamServesM3U() {
+			utils.InfoLog("M3U_URL is the Xtream account's get.php: serving it through the Xtream proxy, not parsing it at boot")
+		} else {
+			var err error
+			p, err = m3u.Parse(config.RemoteURL.String())
+			if err != nil {
+				return nil, utils.PrintErrorAndReturn(err)
+			}
+			utils.InfoLog("Successfully parsed M3U playlist from %s", utils.MaskURL(config.RemoteURL.String()))
 		}
-		utils.InfoLog("Successfully parsed M3U playlist from %s", config.RemoteURL.String())
 	}
 
 	catalogFilter, err := filter.NewSet(config.CatalogFilter)
