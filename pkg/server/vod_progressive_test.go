@@ -124,7 +124,11 @@ func (p *fakeVODProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				last = e
 			}
 		}
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, last, total))
+		if p.noLength {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/*", start, last))
+		} else {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, last, total))
+		}
 		if !p.noLength {
 			w.Header().Set("Content-Length", strconv.FormatInt(last-start+1, 10))
 		}
@@ -166,6 +170,32 @@ func (p *fakeVODProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// assertSinglePass checks the file was downloaded in one pass over a single
+// connection at a time: the header request, then at most one request for the
+// rest from where the header ended, with only bounded window requests in
+// between. Nothing of the sequential pass is downloaded twice.
+func assertSinglePass(t *testing.T, p *fakeVODProvider) {
+	t.Helper()
+	rs := p.rangesSeen()
+	head := fmt.Sprintf("bytes=0-%d", vodHeadSize-1)
+	rest := fmt.Sprintf("bytes=%d-", vodHeadSize)
+	ok := len(rs) == 1 && (rs[0] == "" || rs[0] == head)
+	if len(rs) >= 2 && rs[0] == head && rs[len(rs)-1] == rest {
+		ok = true
+		for _, r := range rs[1 : len(rs)-1] {
+			if strings.HasSuffix(r, "-") { // only bounded windows in between
+				ok = false
+			}
+		}
+	}
+	if !ok {
+		t.Fatalf("provider requests %q, want the header then the rest, once", rs)
+	}
+	if n := p.maxConcurrent(50 * time.Millisecond); n != 1 {
+		t.Fatalf("provider had %d connections open at once, want 1", n)
+	}
+}
+
 func randomBytes(t testing.TB, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
@@ -181,6 +211,11 @@ func progressiveTestServer(t *testing.T, provider http.Handler, cacheEnabled boo
 	t.Helper()
 	t.Setenv("CACHE_FOLDER", t.TempDir())
 	gin.SetMode(gin.TestMode)
+	// These tests are not about connection spacing (see vod_churn_test.go):
+	// keep it short so a test does not wait on the previous one's close.
+	prevSpacing := vodConnPacer.setSpacing(20 * time.Millisecond)
+	t.Cleanup(func() { vodConnPacer.setSpacing(prevSpacing) })
+	vodCacheClient.CloseIdleConnections()
 	up := httptest.NewServer(provider)
 	t.Cleanup(up.Close)
 	c := &Config{
@@ -243,9 +278,7 @@ func TestProgressiveServesFromDownloadWithOneUpstreamConnection(t *testing.T) {
 		t.Fatalf("body differs from the source (%d vs %d bytes)", len(body), len(p.data))
 	}
 	waitDownloadDone(t, c, "101")
-	if n := atomic.LoadInt32(&p.requests); n != 1 {
-		t.Fatalf("provider saw %d requests, want 1", n)
-	}
+	assertSinglePass(t, p)
 	got, err := os.ReadFile(filepath.Join(os.Getenv("CACHE_FOLDER"), "vod", "101.mkv"))
 	if err != nil || !bytes.Equal(got, p.data) {
 		t.Fatalf("cached file wrong: %v", err)
@@ -294,9 +327,7 @@ func TestProgressiveRangesAndHead(t *testing.T) {
 		t.Fatalf("past-end range: status=%d, want 416", resp.StatusCode)
 	}
 	waitDownloadDone(t, c, "102")
-	if n := atomic.LoadInt32(&p.requests); n != 1 {
-		t.Fatalf("provider saw %d requests, want 1", n)
-	}
+	assertSinglePass(t, p)
 }
 
 // Two players of the same uncached item share one download.
@@ -321,9 +352,7 @@ func TestProgressiveTwoPlayersShareOneDownload(t *testing.T) {
 		}
 	}
 	waitDownloadDone(t, c, "103")
-	if n := atomic.LoadInt32(&p.requests); n != 1 {
-		t.Fatalf("provider saw %d requests, want 1", n)
-	}
+	assertSinglePass(t, p)
 }
 
 // A download that stops making progress ends the player's response early (an
@@ -363,9 +392,7 @@ func TestProgressiveStallCutsResponseButDownloadContinues(t *testing.T) {
 		t.Fatal("content reassembled across reconnects differs from the source")
 	}
 	waitDownloadDone(t, c, "104")
-	if n := atomic.LoadInt32(&p.requests); n != 1 {
-		t.Fatalf("provider saw %d requests, want 1 (the stall must not restart the download)", n)
-	}
+	assertSinglePass(t, p) // the stall must not restart the download
 }
 
 // A download that fails ends the in-flight response as interrupted, never

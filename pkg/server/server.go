@@ -40,6 +40,7 @@ import (
 	"github.com/lucasduport/stream-share/pkg/database"
 	"github.com/lucasduport/stream-share/pkg/discord"
 	"github.com/lucasduport/stream-share/pkg/filter"
+	"github.com/lucasduport/stream-share/pkg/provider"
 	"github.com/lucasduport/stream-share/pkg/session"
 	"github.com/lucasduport/stream-share/pkg/slate"
 	"github.com/lucasduport/stream-share/pkg/utils"
@@ -97,6 +98,10 @@ type Config struct {
 	// inProgressDownloads holds the running VOD cache downloads (stream ID ->
 	// *vodDownload): one per item, shared by every request served from it.
 	inProgressDownloads sync.Map
+
+	// providerSlots arbitrates the media connections opened to the provider
+	// (see providerSlotCapacity); never nil once the server is built.
+	providerSlots *provider.Arbiter
 
 	// catalogFilter is the compiled catalogue filter; nil keeps everything, and
 	// every filtering path checks for nil first so it costs nothing when unset.
@@ -173,6 +178,7 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 	if strings.TrimSpace(config.XtreamBaseURL) != "" {
 		serverConfig.providerInfo = &providerInfoState{}
 	}
+	serverConfig.providerSlots = provider.New(serverConfig.providerSlotCapacity)
 
 	// Force PostgreSQL initialization (sqlite removed)
 	utils.InfoLog("Bootstrap: Forcing PostgreSQL database initialization")
@@ -183,6 +189,7 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 	serverConfig.db = db
 	serverConfig.sessionManager = session.NewSessionManager(db)
 	serverConfig.sessionManager.SetNameResolver(serverConfig.resolveStreamName)
+	serverConfig.sessionManager.SetProviderSlots(serverConfig.providerSlots)
 	utils.InfoLog("Session manager initialized with database connection")
 
 	// Seed in-memory name indices from DB so names are available before the first API call.

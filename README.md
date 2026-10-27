@@ -477,6 +477,25 @@ Configuration:
 - `CACHE_FOLDER` — Absolute path to the root cache directory. stream-share creates purpose-specific subfolders underneath it: `<CACHE_FOLDER>/vod` for cached VOD media, `<CACHE_FOLDER>/catchup` for live catchup buffers and `<CACHE_FOLDER>/epg` for the cached XMLTV guide (`xmltv.php` is downloaded once from the provider at startup, served from disk to every player, refreshed in the background after `M3U_CACHE_EXPIRATION_HOURS`, and the last good guide keeps being served if the provider fails). Defaults to `$TMPDIR/stream-share` when unset.
 - `INTERNAL_API_KEY` — API key used by the internal API (Discord bot and tools).
 
+#### Provider connection limit
+
+IPTV accounts allow a limited number of connections at once, often a single one, and the provider cuts the oldest when a new one opens. A cache download keeps running after the viewer leaves (so the item ends up cached), which used to make it fight with whatever the viewer watched next: each one's connection was cut in turn, and playback stalled.
+
+stream-share now arbitrates every media connection it opens to the provider (live streams and VOD cache downloads) within the account's limit:
+
+- Something **watched** (a live stream with viewers, a download a player is reading from) is in the foreground. A download **nobody watches** (the item a viewer left, an explicit `/watch` cache) is in the background.
+- When the limit is reached, a foreground stream **pauses a background download**: its connection is closed, it keeps what it downloaded and **resumes automatically** where it stopped once a connection is free. Pausing does not count against its retries.
+- Background downloads never pause anything; they take free connections in arrival order.
+- If everything in use is being watched, the most recent request takes over the connection (the provider could not serve both anyway).
+
+| Env var | Default | Description |
+|---|---|---|
+| `PROVIDER_MAX_CONNECTIONS` | `0` | `0` uses the limit your provider reports (`max_connections` in its account info, see [Provider subscription info](#provider-subscription-info)) and applies no limit while it is unknown; a positive number forces a limit; `-1` turns arbitration off |
+
+`/api/internal/status` lists who holds the provider connections and which downloads are paused (`provider_slots`) when a limit applies.
+
+Not arbitrated: movies proxied directly when VOD caching is off, HLS segment requests, and the optional provider health probe; they behave as before.
+
 ---
 
 ## Local Catchup Buffering

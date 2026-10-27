@@ -112,6 +112,11 @@ func (c *Config) statusSummary(ctx *gin.Context) {
 	if provider := c.providerStatusBlock(); provider != nil {
 		data["provider"] = provider
 	}
+	// Provider connection slots: who holds the account's connections, and
+	// which downloads are paused waiting for one. Only when a limit applies.
+	if slots := c.providerSlots.Snapshot(); slots.Capacity > 0 {
+		data["provider_slots"] = slots
+	}
 
 	ctx.JSON(http.StatusOK, types.APIResponse{Success: true, Data: data})
 }

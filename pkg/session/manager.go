@@ -33,6 +33,7 @@ import (
 
 	"github.com/lucasduport/stream-share/pkg/catchup"
 	"github.com/lucasduport/stream-share/pkg/database"
+	"github.com/lucasduport/stream-share/pkg/provider"
 	"github.com/lucasduport/stream-share/pkg/slate"
 	"github.com/lucasduport/stream-share/pkg/types"
 	"github.com/lucasduport/stream-share/pkg/utils"
@@ -69,6 +70,9 @@ type SessionManager struct {
 	// while the pump keeps retrying the provider. slateProvider is nil when the
 	// feature is disabled or ffmpeg is unavailable.
 	slateProvider SlateProvider
+	// providerSlots arbitrates provider connections with other consumers
+	// (VOD cache downloads); nil grants every stream at once.
+	providerSlots *provider.Arbiter
 	errorCatalog  *Catalog
 	slateRetryMax time.Duration
 
@@ -770,6 +774,28 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 	go func() {
 		<-buffer.stopChan
 		cancel()
+	}()
+
+	// Hold a provider slot for the life of the stream. It is in the
+	// foreground while anyone watches, so a background VOD download holding
+	// the provider's only connection is paused to make room. If the slot is
+	// taken back for another watched stream (the provider cannot serve both),
+	// this stream stops; its players reconnect if they still want it.
+	lease, slotErr := sm.providerSlots.Acquire(ctx, "live "+sm.streamLabel(buffer.streamID),
+		func() bool { return sm.viewerCount(buffer) > 0 }, provider.Fresh)
+	if slotErr != nil {
+		buffer.markReady(classifyUpstream(slotErr, 0))
+		sm.stopStreamLocking(buffer.streamID)
+		return
+	}
+	defer lease.Release()
+	go func() {
+		select {
+		case <-lease.Preempted():
+			utils.WarnLog("Provider slot: %s gives its connection to another watched stream", sm.streamLabel(buffer.streamID))
+			sm.stopStreamLocking(buffer.streamID)
+		case <-ctx.Done():
+		}
 	}()
 
 	// Dial the upstream. dialUpstream sets the same headers as before: never
