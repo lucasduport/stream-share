@@ -26,12 +26,16 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+// isAdmin reports whether member may use admin features. With an admin role
+// configured, holding that role is required. Without one, only server managers
+// (Manage Server or Administrator) qualify, the same members Discord shows the
+// admin commands to by default. DMs (no member) are never admin.
 func (b *Bot) isAdmin(member *discordgo.Member) bool {
-	if b.adminRoleID == "" {
-		return true // no admin role configured - allow anyone (backwards compat)
-	}
 	if member == nil {
 		return false
+	}
+	if b.adminRoleID == "" {
+		return member.Permissions&(discordgo.PermissionAdministrator|discordgo.PermissionManageGuild) != 0
 	}
 	for _, r := range member.Roles {
 		if r == b.adminRoleID {

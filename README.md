@@ -250,6 +250,8 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 | `/disconnect <ldap_username>` | Disconnect a user from the stream |
 | `/timeout <ldap_username> <minutes>` | Temporarily block a user for N minutes |
 
+Admin features (the admin-only commands, and every user's links in `/shares`) require the role set in `DISCORD_ADMIN_ROLE_ID`. When it is unset, only members with the **Manage Server** or **Administrator** permission count as admins.
+
 Tips:
 - Link your account first with `/link <ldap_user>`.
 - Use `/watch` to search, download, and cache in one step — you get a link immediately while caching runs in the background.
