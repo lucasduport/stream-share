@@ -73,12 +73,12 @@ http://provider.example.com/series/user/pass/11111.mkv
 
 func TestExtractBasePath(t *testing.T) {
 	cases := map[string]string{
-		"/live/user/pass/123.ts":     "live",
-		"/movie/user/pass/456.mp4":   "movie",
-		"/series/user/pass/789.mkv":  "series",
-		"/timeshift/u/p/1/2/3":       "timeshift",
-		"/other/path/123":            "",
-		"/user/pass/123.ts":          "",
+		"/live/user/pass/123.ts":    "live",
+		"/movie/user/pass/456.mp4":  "movie",
+		"/series/user/pass/789.mkv": "series",
+		"/timeshift/u/p/1/2/3":      "timeshift",
+		"/other/path/123":           "",
+		"/user/pass/123.ts":         "",
 	}
 	for path, want := range cases {
 		if got := extractBasePath(path); got != want {

@@ -22,10 +22,10 @@ import (
 
 func TestParseQueryTokens(t *testing.T) {
 	cases := []struct {
-		q                 string
-		wantTokens        []string
-		wantSeason        int
-		wantEpisode       int
+		q           string
+		wantTokens  []string
+		wantSeason  int
+		wantEpisode int
 	}{
 		{"the office s02e04", []string{"the", "office"}, 2, 4},
 		{"the office s2e4", []string{"the", "office"}, 2, 4},

@@ -111,21 +111,6 @@ func catalogCacheTTL() time.Duration {
 	return time.Hour
 }
 
-// getCachedCatalog returns the cached parsed catalog for key if it exists and
-// is still fresh.
-func getCachedCatalog(key string) (interface{}, bool) {
-	catalogCacheMu.RLock()
-	e, ok := catalogCache[key]
-	catalogCacheMu.RUnlock()
-	if !ok {
-		return nil, false
-	}
-	if time.Since(e.fetchedAt) >= catalogCacheTTL() {
-		return nil, false
-	}
-	return e.data, true
-}
-
 // peekCatalogEntry returns the cached entry for key, fresh or stale, without
 // fetching; nil when nothing is cached.
 func peekCatalogEntry(key string) *catalogEntry {
@@ -288,20 +273,4 @@ func catalogKeyLabel(key string) string {
 		return key[:i]
 	}
 	return key
-}
-
-// invalidateCatalogCache drops all cached catalogs. Called when the provider
-// configuration changes or on explicit refresh.
-func invalidateCatalogCache() {
-	catalogCacheMu.Lock()
-	catalogCache = map[string]*catalogEntry{}
-	catalogCacheMu.Unlock()
-}
-
-// invalidateCatalogCacheKey drops a single cached catalog entry, forcing the
-// next access to re-fetch from the provider.
-func invalidateCatalogCacheKey(key string) {
-	catalogCacheMu.Lock()
-	delete(catalogCache, key)
-	catalogCacheMu.Unlock()
 }

@@ -19,7 +19,6 @@
 package utils
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 )
@@ -44,11 +43,4 @@ func GetenvInt(key string) int {
 		return 0
 	}
 	return n
-}
-
-// PrintEnv prints the current environment variables
-func PrintEnv() {
-	for _, e := range os.Environ() {
-		fmt.Println(e)
-	}
 }

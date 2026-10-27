@@ -131,3 +131,32 @@ func TestInvalidateCatalogCacheKey(t *testing.T) {
 		t.Fatal("k2 should still be cached")
 	}
 }
+
+// getCachedCatalog returns the cached parsed catalog for key if it exists and
+// is still fresh.
+func getCachedCatalog(key string) (interface{}, bool) {
+	catalogCacheMu.RLock()
+	e, ok := catalogCache[key]
+	catalogCacheMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if time.Since(e.fetchedAt) >= catalogCacheTTL() {
+		return nil, false
+	}
+	return e.data, true
+}
+
+// invalidateCatalogCache drops all cached catalogs.
+func invalidateCatalogCache() {
+	catalogCacheMu.Lock()
+	catalogCache = map[string]*catalogEntry{}
+	catalogCacheMu.Unlock()
+}
+
+// invalidateCatalogCacheKey drops a single cached catalog entry.
+func invalidateCatalogCacheKey(key string) {
+	catalogCacheMu.Lock()
+	delete(catalogCache, key)
+	catalogCacheMu.Unlock()
+}

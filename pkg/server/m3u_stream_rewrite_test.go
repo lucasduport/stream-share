@@ -27,47 +27,47 @@ import (
 
 func TestRewriteM3UURLLine(t *testing.T) {
 	cases := []struct {
-		name                          string
-		line                          string
-		xtreamUser, xtreamPass        string
-		localUser, localPass          string
-		want                          string
+		name                   string
+		line                   string
+		xtreamUser, xtreamPass string
+		localUser, localPass   string
+		want                   string
 	}{
 		{
-			name:           "path credentials",
-			line:           "http://provider.example.com/live/xtreamuser/xtreampass/12345.ts",
-			xtreamUser:     "xtreamuser",
-			xtreamPass:     "xtreampass",
-			localUser:      "localuser",
-			localPass:      "localpass",
-			want:           "http://provider.example.com/live/localuser/localpass/12345.ts",
+			name:       "path credentials",
+			line:       "http://provider.example.com/live/xtreamuser/xtreampass/12345.ts",
+			xtreamUser: "xtreamuser",
+			xtreamPass: "xtreampass",
+			localUser:  "localuser",
+			localPass:  "localpass",
+			want:       "http://provider.example.com/live/localuser/localpass/12345.ts",
 		},
 		{
-			name:           "query credentials",
-			line:           "http://provider.example.com/get.php?username=xtreamuser&password=xtreampass&type=m3u",
-			xtreamUser:     "xtreamuser",
-			xtreamPass:     "xtreampass",
-			localUser:      "localuser",
-			localPass:      "localpass",
-			want:           "http://provider.example.com/get.php?password=localpass&type=m3u&username=localuser",
+			name:       "query credentials",
+			line:       "http://provider.example.com/get.php?username=xtreamuser&password=xtreampass&type=m3u",
+			xtreamUser: "xtreamuser",
+			xtreamPass: "xtreampass",
+			localUser:  "localuser",
+			localPass:  "localpass",
+			want:       "http://provider.example.com/get.php?password=localpass&type=m3u&username=localuser",
 		},
 		{
-			name:           "no credentials to replace",
-			line:           "http://provider.example.com/live/other/pass/123.ts",
-			xtreamUser:     "xtreamuser",
-			xtreamPass:     "xtreampass",
-			localUser:      "localuser",
-			localPass:      "localpass",
-			want:           "http://provider.example.com/live/other/pass/123.ts",
+			name:       "no credentials to replace",
+			line:       "http://provider.example.com/live/other/pass/123.ts",
+			xtreamUser: "xtreamuser",
+			xtreamPass: "xtreampass",
+			localUser:  "localuser",
+			localPass:  "localpass",
+			want:       "http://provider.example.com/live/other/pass/123.ts",
 		},
 		{
-			name:           "empty xtream creds passthrough",
-			line:           "http://provider.example.com/live/u/p/1.ts",
-			xtreamUser:     "",
-			xtreamPass:     "",
-			localUser:      "localuser",
-			localPass:      "localpass",
-			want:           "http://provider.example.com/live/u/p/1.ts",
+			name:       "empty xtream creds passthrough",
+			line:       "http://provider.example.com/live/u/p/1.ts",
+			xtreamUser: "",
+			xtreamPass: "",
+			localUser:  "localuser",
+			localPass:  "localpass",
+			want:       "http://provider.example.com/live/u/p/1.ts",
 		},
 	}
 	for _, tc := range cases {

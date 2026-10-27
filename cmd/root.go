@@ -85,8 +85,7 @@ It supports:
 			}
 		}
 
-		// Initialize debug logging and cache folder
-		config.DebugLoggingEnabled = viper.GetBool("log-debug-enabled")
+		// Initialize cache folder
 		config.CacheFolder = viper.GetString("cache-folder")
 		if config.CacheFolder != "" && !strings.HasSuffix(config.CacheFolder, "/") {
 			config.CacheFolder += "/"

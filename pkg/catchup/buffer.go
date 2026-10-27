@@ -64,9 +64,6 @@ type DiskBuffer struct {
 	drainDone chan struct{} // closed by drainLoop when all writes are flushed to disk
 	stopped   int32         // accessed via atomic
 
-	stoppedMu sync.Mutex
-	stoppedAt time.Time
-
 	indexMu sync.RWMutex // guards current and prev
 	current segment      // actively-written file
 	prev    segment      // previous file after a rotation; empty filePath means none
@@ -196,9 +193,6 @@ func (b *DiskBuffer) Write(p []byte) {
 // Stop signals the drain goroutine to finish. Safe to call multiple times.
 func (b *DiskBuffer) Stop() {
 	if atomic.CompareAndSwapInt32(&b.stopped, 0, 1) {
-		b.stoppedMu.Lock()
-		b.stoppedAt = time.Now()
-		b.stoppedMu.Unlock()
 		close(b.writeCh)
 	}
 }
@@ -213,15 +207,8 @@ func (b *DiskBuffer) Delete() error {
 	return os.Remove(cur)
 }
 
-func (b *DiskBuffer) IsStopped() bool            { return atomic.LoadInt32(&b.stopped) != 0 }
 func (b *DiskBuffer) DrainDone() <-chan struct{} { return b.drainDone }
 func (b *DiskBuffer) StreamID() string           { return b.streamID }
-
-func (b *DiskBuffer) StoppedAt() time.Time {
-	b.stoppedMu.Lock()
-	defer b.stoppedMu.Unlock()
-	return b.stoppedAt
-}
 
 func (b *DiskBuffer) FilePath() string {
 	b.indexMu.RLock()

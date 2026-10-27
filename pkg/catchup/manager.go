@@ -160,29 +160,6 @@ func (m *Manager) StopBuffer(streamID string) {
 	}()
 }
 
-// DeleteBuffer immediately stops and deletes the buffer (used on shutdown).
-func (m *Manager) DeleteBuffer(streamID string) {
-	if !m.enabled {
-		return
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if cancel, ok := m.graceCancels[streamID]; ok {
-		close(cancel)
-		delete(m.graceCancels, streamID)
-	}
-
-	if buf, ok := m.buffers[streamID]; ok {
-		buf.Stop()
-		if err := buf.Delete(); err != nil && !os.IsNotExist(err) {
-			utils.WarnLog("Catchup: failed to delete buffer file %s: %v", buf.FilePath(), err)
-		}
-		delete(m.buffers, streamID)
-	}
-}
-
 // Cleanup stops and deletes all buffers. Call on server shutdown.
 func (m *Manager) Cleanup() {
 	if !m.enabled {

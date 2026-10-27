@@ -47,7 +47,6 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 	}
 
 	utils.DebugLog("Live categories response - HTTP Status: %d, Content-Type: %s", httpCode, contentType)
-	utils.DumpStructToLog("live_categories", catResp)
 
 	// Type assert the response to the expected format
 	catData, ok := catResp.([]interface{})
@@ -89,7 +88,6 @@ func (c *Config) xtreamGenerateM3u(ctx *gin.Context, extension string) (*m3u.Pla
 		}
 
 		utils.DebugLog("Streams response - HTTP Status: %d, Content-Type: %s", httpCode, contentType)
-		utils.DumpStructToLog(fmt.Sprintf("streams_cat_%s", categoryID), liveResp)
 
 		liveData, ok := liveResp.([]interface{})
 		if !ok {
