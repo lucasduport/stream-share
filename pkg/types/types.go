@@ -129,10 +129,12 @@ type TemporaryLink struct {
 // token may watch that channel between StartsAt and EndsAt, on behalf of
 // CreatedBy (a household user), until it ends or is revoked.
 type LiveShare struct {
-	Token     string     `json:"token"`
-	StreamID  string     `json:"stream_id"`
-	Title     string     `json:"title"`
-	CreatedBy string     `json:"created_by"`
+	Token     string `json:"token"`
+	StreamID  string `json:"stream_id"`
+	Title     string `json:"title"`
+	CreatedBy string `json:"created_by"`
+	// Guest optionally names who the link is for, to tell links apart.
+	Guest     string     `json:"guest,omitempty"`
 	StartsAt  time.Time  `json:"starts_at"`
 	EndsAt    time.Time  `json:"ends_at"`
 	RevokedAt *time.Time `json:"revoked_at,omitempty"`

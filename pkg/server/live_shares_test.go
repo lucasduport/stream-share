@@ -131,7 +131,7 @@ func shareTestServer(t *testing.T, capacity int, rules *filter.Config) *shareEnv
 
 func (e *shareEnv) share(t *testing.T, streamID string, start, end time.Time) *types.LiveShare {
 	t.Helper()
-	sh, _, err := e.c.createLiveShare("lucas", streamID, start, end, time.Now())
+	sh, _, err := e.c.createLiveShare("lucas", "", streamID, start, end, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,11 +247,11 @@ func TestShareCreationValidation(t *testing.T) {
 		{"bad id", "../1", now, now.Add(time.Hour), http.StatusBadRequest},
 	}
 	for _, tc := range cases {
-		if _, code, err := e.c.createLiveShare("lucas", tc.id, tc.start, tc.end, now); err == nil || code != tc.code {
+		if _, code, err := e.c.createLiveShare("lucas", "", tc.id, tc.start, tc.end, now); err == nil || code != tc.code {
 			t.Errorf("%s: code=%d err=%v, want %d", tc.name, code, err, tc.code)
 		}
 	}
-	sh, _, err := e.c.createLiveShare("lucas", "101.ts", now, now.Add(time.Hour), now)
+	sh, _, err := e.c.createLiveShare("lucas", "", "101.ts", now, now.Add(time.Hour), now)
 	if err != nil || sh.StreamID != "101" || sh.Title != "A| Channel One" || len(sh.Token) != 22 {
 		t.Fatalf("valid share: %+v %v", sh, err)
 	}
@@ -289,6 +289,19 @@ func TestShareStreamsAndCapsDevices(t *testing.T) {
 		t.Fatalf("provider saw %d connections at once, want 1 (devices share the stream)", got)
 	}
 	if name := displayNameFor(shareIdentity(sh.Token), nil); name != "lucas (share)" {
+		t.Fatalf("display name = %q", name)
+	}
+}
+
+// A link may name its guest: viewers show up under the creator who invited
+// them, with the guest's name.
+func TestShareGuestName(t *testing.T) {
+	e := shareTestServer(t, 0, nil)
+	sh, _, err := e.c.createLiveShare("lucas", "  Paul  ", "101", time.Now(), time.Now().Add(time.Hour), time.Now())
+	if err != nil || sh.Guest != "Paul" {
+		t.Fatalf("guest = %q, %v", sh.Guest, err)
+	}
+	if name := displayNameFor(shareIdentity(sh.Token), nil); name != "lucas (share: Paul)" {
 		t.Fatalf("display name = %q", name)
 	}
 }
@@ -428,14 +441,14 @@ func TestShareInternalAPI(t *testing.T) {
 		return w.Code, out
 	}
 	end := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
-	code, out := do(http.MethodPost, "/shares", `{"username":"lucas","stream_id":"101","ends_at":"`+end+`"}`)
+	code, out := do(http.MethodPost, "/shares", `{"username":"lucas","guest":"Paul","stream_id":"101","ends_at":"`+end+`"}`)
 	if code != http.StatusOK {
 		t.Fatalf("create: %d %v", code, out)
 	}
 	data := out["data"].(map[string]interface{})
 	token := data["token"].(string)
 	urls := data["urls"].(map[string]interface{})
-	if data["state"] != types.ShareActive || urls["playlist"] != "https://tv.example/share/"+token+".m3u" {
+	if data["state"] != types.ShareActive || data["guest"] != "Paul" || urls["playlist"] != "https://tv.example/share/"+token+".m3u" {
 		t.Fatalf("create data: %v", data)
 	}
 	if code, out := do(http.MethodPost, "/shares", `{"username":"lucas","stream_id":"101","ends_at":"tomorrow"}`); code != http.StatusBadRequest {

@@ -47,11 +47,11 @@ func TestShareCommandSpecs(t *testing.T) {
 func TestShareMessages(t *testing.T) {
 	created := map[string]interface{}{
 		"token": "abcdefghijklmnopqrstuv", "title": "XX| Some Channel", "state": "scheduled",
-		"starts_at": "2026-10-28T20:00:00Z", "ends_at": "2026-10-28T22:00:00Z", "created_by": "alice",
+		"starts_at": "2026-10-28T20:00:00Z", "ends_at": "2026-10-28T22:00:00Z", "created_by": "alice", "guest": "Paul",
 		"urls": map[string]interface{}{"playlist": "https://tv.example/share/abcdefghijklmnopqrstuv.m3u", "stream": "https://tv.example/share/abcdefghijklmnopqrstuv/live.ts"},
 	}
 	msg := shareCreatedMessage(created, "")
-	for _, want := range []string{"XX| Some Channel", "https://tv.example/share/abcdefghijklmnopqrstuv.m3u", "/live.ts", "VLC", "3 devices"} {
+	for _, want := range []string{"XX| Some Channel", "with **Paul**", "https://tv.example/share/abcdefghijklmnopqrstuv.m3u", "/live.ts", "VLC", "3 devices"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("created message lacks %q:\n%s", want, msg)
 		}
@@ -63,7 +63,7 @@ func TestShareMessages(t *testing.T) {
 	if len(buttons) != 1 || buttons[0].CustomID != shareRevokePrefix+"abcdefghijklmnopqrstuv" {
 		t.Fatalf("buttons = %+v (only links not over yet get one)", buttons)
 	}
-	if !strings.Contains(content, "1. XX| Some Channel") || !strings.Contains(content, "2. Old") || strings.Contains(content, "zzzzzz") {
+	if !strings.Contains(content, "1. XX| Some Channel** for Paul") || !strings.Contains(content, "2. Old") || strings.Contains(content, "zzzzzz") {
 		t.Fatalf("list:\n%s", content)
 	}
 

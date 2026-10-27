@@ -33,9 +33,9 @@ func (m *DBManager) CreateLiveShare(s *types.LiveShare) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := m.db.ExecContext(ctx, `
-        INSERT INTO live_shares (token, stream_id, title, created_by, starts_at, ends_at, created_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, s.Token, s.StreamID, s.Title, s.CreatedBy, s.StartsAt.UTC(), s.EndsAt.UTC(), s.CreatedAt.UTC())
+        INSERT INTO live_shares (token, stream_id, title, created_by, guest, starts_at, ends_at, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, s.Token, s.StreamID, s.Title, s.CreatedBy, s.Guest, s.StartsAt.UTC(), s.EndsAt.UTC(), s.CreatedAt.UTC())
 	return err
 }
 
@@ -48,7 +48,7 @@ func (m *DBManager) ListLiveShares(since time.Time) ([]*types.LiveShare, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	rows, err := m.db.QueryContext(ctx, `
-        SELECT token, stream_id, title, created_by, starts_at, ends_at, revoked_at, created_at
+        SELECT token, stream_id, title, created_by, guest, starts_at, ends_at, revoked_at, created_at
         FROM live_shares WHERE ends_at > $1 ORDER BY created_at DESC
     `, since.UTC())
 	if err != nil {
@@ -59,7 +59,7 @@ func (m *DBManager) ListLiveShares(since time.Time) ([]*types.LiveShare, error) 
 	for rows.Next() {
 		s := &types.LiveShare{}
 		var revoked sql.NullTime
-		if err := rows.Scan(&s.Token, &s.StreamID, &s.Title, &s.CreatedBy, &s.StartsAt, &s.EndsAt, &revoked, &s.CreatedAt); err != nil {
+		if err := rows.Scan(&s.Token, &s.StreamID, &s.Title, &s.CreatedBy, &s.Guest, &s.StartsAt, &s.EndsAt, &revoked, &s.CreatedAt); err != nil {
 			return nil, err
 		}
 		if revoked.Valid {

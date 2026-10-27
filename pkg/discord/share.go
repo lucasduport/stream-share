@@ -41,6 +41,7 @@ const (
 type shareSelectContext struct {
 	UserID   string
 	LDAPUser string
+	Guest    string
 	Start    time.Time
 	End      time.Time
 	Channels map[string]string // stream_id -> display label
@@ -91,6 +92,7 @@ func (b *Bot) handleShareCommand(s *discordgo.Session, i *discordgo.InteractionC
 	query := optString(i, "channel")
 	startArg := optString(i, "start")
 	untilArg := optString(i, "until")
+	guest := strings.TrimSpace(optString(i, "guest"))
 	ackEphemeral(s, i, "Looking up channels…")
 
 	ldapUser, err := b.ldapUserOf(i)
@@ -141,7 +143,7 @@ func (b *Bot) handleShareCommand(s *discordgo.Session, i *discordgo.InteractionC
 	}
 	b.shareLock.Lock()
 	b.pendingShareSelect[msgID] = &shareSelectContext{
-		UserID: interactionUserID(i), LDAPUser: ldapUser, Start: start, End: end, Channels: channels, Created: time.Now(),
+		UserID: interactionUserID(i), LDAPUser: ldapUser, Guest: guest, Start: start, End: end, Channels: channels, Created: time.Now(),
 	}
 	b.shareLock.Unlock()
 }
@@ -165,6 +167,7 @@ func (b *Bot) handleShareSelect(s *discordgo.Session, i *discordgo.InteractionCr
 	id := values[0]
 	payload := map[string]interface{}{
 		"username":  ctx.LDAPUser,
+		"guest":     ctx.Guest,
 		"stream_id": id,
 		"starts_at": ctx.Start.Format(time.RFC3339),
 		"ends_at":   ctx.End.Format(time.RFC3339),
@@ -192,7 +195,11 @@ func shareCreatedMessage(resp interface{}, channel string) string {
 		channel = getString(m, "title")
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "✅ **%s** is shared from **%s** to **%s**.\n\n", channel, shareFmt(start.Local()), shareFmt(end.Local()))
+	forWhom := ""
+	if g := getString(m, "guest"); g != "" {
+		forWhom = " with **" + g + "**"
+	}
+	fmt.Fprintf(&b, "✅ **%s** is shared%s from **%s** to **%s**.\n\n", channel, forWhom, shareFmt(start.Local()), shareFmt(end.Local()))
 	fmt.Fprintf(&b, "Playlist (VLC, IPTV apps): %s\n", getString(urls, "playlist"))
 	fmt.Fprintf(&b, "Direct stream: %s\n\n", getString(urls, "stream"))
 	b.WriteString("Send one of these links to your guest. In VLC: *Media → Open Network Stream* and paste it. ")
@@ -240,7 +247,11 @@ func renderShareList(list []interface{}) (string, []discordgo.Button) {
 		end, _ := time.Parse(time.RFC3339, getString(m, "ends_at"))
 		urls, _ := m["urls"].(map[string]interface{})
 		icon := map[string]string{"active": "🟢", "scheduled": "🕒", "ended": "⚪", "revoked": "⛔"}[state]
-		fmt.Fprintf(&b, "%s **%d. %s** — %s → %s (%s, by %s)\n", icon, n+1, getString(m, "title"),
+		guest := ""
+		if g := getString(m, "guest"); g != "" {
+			guest = " for " + g
+		}
+		fmt.Fprintf(&b, "%s **%d. %s**%s — %s → %s (%s, by %s)\n", icon, n+1, getString(m, "title"), guest,
 			shareFmt(start.Local()), shareFmt(end.Local()), state, getString(m, "created_by"))
 		if state == "active" || state == "scheduled" {
 			fmt.Fprintf(&b, "   %s\n", getString(urls, "playlist"))

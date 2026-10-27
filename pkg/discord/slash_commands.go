@@ -45,6 +45,7 @@ func (b *Bot) commandSpecs() []*discordgo.ApplicationCommand {
 				{Type: discordgo.ApplicationCommandOptionString, Name: "channel", Description: "Channel name to search", Required: true},
 				{Type: discordgo.ApplicationCommandOptionString, Name: "until", Description: "End: 23:00, tomorrow 01:00, 2026-11-02 23:00, or a duration (2h, 90m)", Required: true},
 				{Type: discordgo.ApplicationCommandOptionString, Name: "start", Description: "Start (default now): 21:00, tomorrow 21:00 / demain 21:00, 2026-11-02 21:00", Required: false},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "guest", Description: "Who the link is for (shown next to your name in status and history)", Required: false, MaxLength: 40},
 			},
 		},
 		{

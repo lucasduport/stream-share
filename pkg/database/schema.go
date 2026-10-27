@@ -161,6 +161,10 @@ func (m *DBManager) initSchema() error {
 		utils.ErrorLog("Failed to create live_shares table: %v", err)
 		return fmt.Errorf("failed to create live_shares table: %w", err)
 	}
+	if _, err := m.db.Exec(`ALTER TABLE live_shares ADD COLUMN IF NOT EXISTS guest TEXT NOT NULL DEFAULT ''`); err != nil {
+		utils.ErrorLog("Failed to add guest to live_shares: %v", err)
+		return fmt.Errorf("failed to add guest to live_shares: %w", err)
+	}
 
 	utils.InfoLog("Database schema initialized successfully")
 	return nil

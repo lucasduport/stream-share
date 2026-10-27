@@ -26,7 +26,8 @@ package server
 // see session.ShareIdentityPrefix), never the creator's username: the session
 // manager treats all connections of one username as one person's devices, and
 // a guest zapping must not stop the creator's channel or the reverse. They are
-// displayed as "<creator> (share)" in /status and history.
+// displayed under the creator who invited them: "<creator> (share: <guest>)"
+// in /status and history, or "<creator> (share)" when the link names no guest.
 //
 // Priority: share streams hold provider slots in the provider.Share class,
 // above background cache downloads and below the household. With a
@@ -82,9 +83,10 @@ func newShareStore() *shareStore {
 	return &shareStore{byToken: map[string]*types.LiveShare{}, conns: map[string]int{}}
 }
 
-// shareCreators maps a share identity to its creator, for display names. It is
+// shareNames maps a share identity to its display name: always the creator
+// (who invited), with the guest's name when the link has one. It is
 // package-level because displayNameFor is called without a Config.
-var shareCreators sync.Map // identity -> creator username
+var shareNames sync.Map // identity -> display name
 
 // shareIdentity is the internal username of a share link's viewers.
 func shareIdentity(token string) string {
@@ -94,13 +96,21 @@ func shareIdentity(token string) string {
 	return session.ShareIdentityPrefix + token
 }
 
-// shareDisplayName returns "<creator> (share)" for a share identity.
+// shareDisplayName returns "<creator> (share: <guest>)", or "<creator> (share)"
+// when the link names no guest, for a share identity.
 func shareDisplayName(identity string) (string, bool) {
-	v, ok := shareCreators.Load(identity)
+	v, ok := shareNames.Load(identity)
 	if !ok {
 		return "", false
 	}
-	return v.(string) + " (share)", true
+	return v.(string), true
+}
+
+func shareDisplayFor(sh *types.LiveShare) string {
+	if sh.Guest != "" {
+		return sh.CreatedBy + " (share: " + sh.Guest + ")"
+	}
+	return sh.CreatedBy + " (share)"
 }
 
 // tokenLabel is the part of a token that may appear in logs.
@@ -115,7 +125,7 @@ func (s *shareStore) put(sh *types.LiveShare) {
 	s.mu.Lock()
 	s.byToken[sh.Token] = sh
 	s.mu.Unlock()
-	shareCreators.Store(shareIdentity(sh.Token), sh.CreatedBy)
+	shareNames.Store(shareIdentity(sh.Token), shareDisplayFor(sh))
 }
 
 func (s *shareStore) get(token string) (*types.LiveShare, bool) {
@@ -214,7 +224,7 @@ func (s *shareStore) purge(cutoff time.Time) {
 	for token, sh := range s.byToken {
 		if sh.EndsAt.Before(cutoff) && s.conns[token] == 0 {
 			delete(s.byToken, token)
-			shareCreators.Delete(shareIdentity(token))
+			shareNames.Delete(shareIdentity(token))
 		}
 	}
 }
@@ -289,8 +299,12 @@ func (c *Config) liveChannel(streamID string, allowFetch bool) (map[string]inter
 }
 
 // createLiveShare validates and stores a new link.
-func (c *Config) createLiveShare(username, streamID string, start, end, now time.Time) (*types.LiveShare, int, error) {
+func (c *Config) createLiveShare(username, guest, streamID string, start, end, now time.Time) (*types.LiveShare, int, error) {
 	username = strings.TrimSpace(username)
+	guest = strings.TrimSpace(guest)
+	if len([]rune(guest)) > 40 {
+		guest = string([]rune(guest)[:40])
+	}
 	streamID = normalizeStreamID(strings.TrimSpace(streamID))
 	switch {
 	case username == "":
@@ -322,7 +336,7 @@ func (c *Config) createLiveShare(username, streamID string, start, end, now time
 	}
 	sh := &types.LiveShare{
 		Token: token, StreamID: streamID, Title: strings.TrimSpace(catalogString(ch["name"])),
-		CreatedBy: username, StartsAt: start, EndsAt: end, CreatedAt: now,
+		CreatedBy: username, Guest: guest, StartsAt: start, EndsAt: end, CreatedAt: now,
 	}
 	if c.db != nil && c.db.IsInitialized() {
 		if err := c.db.CreateLiveShare(sh); err != nil {
@@ -330,7 +344,11 @@ func (c *Config) createLiveShare(username, streamID string, start, end, now time
 		}
 	}
 	c.shares.put(sh)
-	utils.InfoLog("Share link %s created by %s for %s, %s → %s", tokenLabel(token), username,
+	forWhom := ""
+	if guest != "" {
+		forWhom = " (guest " + guest + ")"
+	}
+	utils.InfoLog("Share link %s created by %s%s for %s, %s → %s", tokenLabel(token), username, forWhom,
 		c.streamLabel(streamID), start.Format("2006-01-02 15:04"), end.Format("2006-01-02 15:04"))
 	return sh, http.StatusOK, nil
 }
@@ -526,7 +544,8 @@ func (c *Config) shareViewOf(sh *types.LiveShare, now time.Time) shareView {
 }
 
 // createShareAPI POST /api/internal/shares
-// {username, stream_id, starts_at?, ends_at} (RFC 3339; starts_at defaults to now).
+// {username, guest?, stream_id, starts_at?, ends_at} (RFC 3339; starts_at
+// defaults to now).
 func (c *Config) createShareAPI(ctx *gin.Context) {
 	if c.shares == nil {
 		ctx.JSON(http.StatusServiceUnavailable, types.APIResponse{Success: false, Error: "share links unavailable"})
@@ -534,6 +553,7 @@ func (c *Config) createShareAPI(ctx *gin.Context) {
 	}
 	var req struct {
 		Username string `json:"username"`
+		Guest    string `json:"guest"`
 		StreamID string `json:"stream_id"`
 		StartsAt string `json:"starts_at"`
 		EndsAt   string `json:"ends_at"`
@@ -557,7 +577,7 @@ func (c *Config) createShareAPI(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, types.APIResponse{Success: false, Error: "ends_at must be RFC 3339"})
 		return
 	}
-	sh, code, err := c.createLiveShare(req.Username, req.StreamID, start, end, now)
+	sh, code, err := c.createLiveShare(req.Username, req.Guest, req.StreamID, start, end, now)
 	if err != nil {
 		ctx.JSON(code, types.APIResponse{Success: false, Error: err.Error()})
 		return

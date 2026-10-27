@@ -27,7 +27,7 @@ import (
 func (b *Bot) handleHelp(s *discordgo.Session, m *discordgo.MessageCreate) {
 	userCmds := []discordgo.MessageEmbedField{
 		{Name: "/watch <query> [days]", Value: "Search movies and shows. Pick from the dropdown to get a download link — the item is cached automatically for 1–14 days (default 7). Supports queries like `show s02e04`.", Inline: false},
-		{Name: "/share <channel> <until> [start]", Value: "Share a live channel for a time window: pick the channel, get a link for VLC or an IPTV app (up to 3 devices). `until`: `23:00`, `tomorrow 01:00`, `2026-11-02 23:00` or a duration (`2h`, `90m`); `start` (default now): `21:00`, `tomorrow 21:00`. Your own viewing has priority over the link.", Inline: false},
+		{Name: "/share <channel> <until> [start] [guest]", Value: "Share a live channel for a time window: pick the channel, get a link for VLC or an IPTV app (up to 3 devices). `until`: `23:00`, `tomorrow 01:00`, `2026-11-02 23:00` or a duration (`2h`, `90m`); `start` (default now): `21:00`, `tomorrow 21:00`; `guest`: who it is for, shown next to your name in status and history. Your own viewing has priority over the link.", Inline: false},
 		{Name: "/shares", Value: "List your share links (admins: all links) and revoke them.", Inline: false},
 		{Name: "/library", Value: "List all cached items with their expiry times and who requested them.", Inline: false},
 		{Name: "/link <ldap_username>", Value: "Link your Discord account to your IPTV (LDAP) user. Run this once before using other commands.", Inline: false},

@@ -23,7 +23,7 @@ func freshShareDB(t *testing.T) *DBManager {
 func TestLiveSharesCreateListRevokeDelete(t *testing.T) {
 	m := freshShareDB(t)
 	now := time.Now().Truncate(time.Second)
-	active := &types.LiveShare{Token: "tok-active", StreamID: "11", Title: "Channel", CreatedBy: "alice",
+	active := &types.LiveShare{Token: "tok-active", StreamID: "11", Title: "Channel", CreatedBy: "alice", Guest: "Paul",
 		StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), CreatedAt: now}
 	old := &types.LiveShare{Token: "tok-old", StreamID: "12", Title: "Old", CreatedBy: "bob",
 		StartsAt: now.Add(-72 * time.Hour), EndsAt: now.Add(-48 * time.Hour), CreatedAt: now.Add(-72 * time.Hour)}
@@ -37,7 +37,7 @@ func TestLiveSharesCreateListRevokeDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Token != "tok-active" || got[0].CreatedBy != "alice" || got[0].RevokedAt != nil {
+	if len(got) != 1 || got[0].Token != "tok-active" || got[0].CreatedBy != "alice" || got[0].Guest != "Paul" || got[0].RevokedAt != nil {
 		t.Fatalf("list = %+v", got)
 	}
 	if !got[0].StartsAt.Equal(active.StartsAt) || !got[0].EndsAt.Equal(active.EndsAt) {
