@@ -160,7 +160,13 @@ func (c *Config) registerVODView(username, streamID, streamType, fallbackTitle s
 	if strings.TrimSpace(label) == "" {
 		label = streamID
 	}
-	utils.InfoLog("VOD %s started: %s for user %s", streamType, label, username)
+	// A playback issues many Range requests (open, index near the end, seeks):
+	// announce the view once, on the request that starts it.
+	if c.sessionManager.HasVODViewer(username, streamID) {
+		utils.DebugLog("VOD %s request: %s for user %s", streamType, label, username)
+	} else {
+		utils.InfoLog("VOD %s started: %s for user %s", streamType, label, username)
+	}
 	c.sessionManager.RegisterVODView(username, streamID, streamType, label)
 	return func() { c.sessionManager.UnregisterVODView(username, streamID) }
 }

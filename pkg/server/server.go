@@ -628,7 +628,8 @@ func (c *Config) authWithPathCredentials() gin.HandlerFunc {
 			utils.ErrorLog("authWithPathCredentials: sessionManager is NIL - cannot register user session")
 		} else {
 			c.sessionManager.RegisterUser(username, ip, userAgent)
-			utils.InfoLog("authWithPathCredentials: session registered for user=%s ip=%s", username, ip)
+			// Per request: RegisterUser itself logs a genuinely new session.
+			utils.DebugLog("authWithPathCredentials: session registered for user=%s ip=%s", username, ip)
 		}
 		ctx.Set("username", username)
 
