@@ -144,6 +144,24 @@ func (m *DBManager) initSchema() error {
 		return fmt.Errorf("failed to create ip_aliases alias index: %w", err)
 	}
 
+	// live_shares holds scheduled share links to a live channel: the token is
+	// the credential, valid between starts_at and ends_at unless revoked.
+	if _, err := m.db.Exec(`
+        CREATE TABLE IF NOT EXISTS live_shares (
+            token      TEXT PRIMARY KEY,
+            stream_id  TEXT NOT NULL,
+            title      TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL,
+            starts_at  TIMESTAMPTZ NOT NULL,
+            ends_at    TIMESTAMPTZ NOT NULL,
+            revoked_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    `); err != nil {
+		utils.ErrorLog("Failed to create live_shares table: %v", err)
+		return fmt.Errorf("failed to create live_shares table: %w", err)
+	}
+
 	utils.InfoLog("Database schema initialized successfully")
 	return nil
 }

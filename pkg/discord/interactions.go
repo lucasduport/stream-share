@@ -21,6 +21,7 @@ package discord
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/lucasduport/stream-share/pkg/utils"
@@ -44,7 +45,14 @@ func (b *Bot) handleInteractionCreate(s *discordgo.Session, i *discordgo.Interac
 	case "retry":
 		b.handleRetry(s, i, msgID)
 
+	case shareSelectID:
+		b.handleShareSelect(s, i)
+
 	default:
+		if strings.HasPrefix(customID, shareRevokePrefix) {
+			b.handleShareRevoke(s, i, strings.TrimPrefix(customID, shareRevokePrefix))
+			return
+		}
 		if customID != "vod_select" {
 			return
 		}

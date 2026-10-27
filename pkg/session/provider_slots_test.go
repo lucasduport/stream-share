@@ -101,3 +101,89 @@ func TestLiveStreamWithoutArbiter(t *testing.T) {
 	}
 	removeKey(sm, "live-2", key)
 }
+
+// A share link's viewers have their own identity: with two connections, the
+// creator on one channel and the share on another both play (the share is not
+// one of the creator's devices, so neither stream stops the other).
+func TestShareIdentityDoesNotStopCreatorsChannel(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	sm := newTestManager()
+	defer sm.Stop()
+	sm.SetProviderSlots(provider.New(func() int { return 2 }))
+
+	_, mine, err := sm.RequestStream("lucas", "ch-x", "live", "X", mustURL(t, srv1.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go keepDraining(sm, "ch-x", mine, stop)
+	_, guest, err := sm.RequestStream(ShareIdentityPrefix+"abc123", "ch-y", "live", "Y", mustURL(t, srv2.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !receiving(sm, "ch-y", guest, 3*time.Second) {
+		t.Fatal("the share should play on its own channel")
+	}
+	if !streamActive(sm, "ch-x") || !streamActive(sm, "ch-y") {
+		t.Fatal("both channels should stay up")
+	}
+	removeKey(sm, "ch-y", guest)
+	removeKey(sm, "ch-x", mine)
+}
+
+// With one connection the household wins: a household stream takes the slot
+// from a share-only stream, which stops.
+func TestHouseholdPreemptsShareStream(t *testing.T) {
+	var opens1, opens2 int64
+	srv1 := countingUpstream(t, &opens1)
+	defer srv1.Close()
+	srv2 := countingUpstream(t, &opens2)
+	defer srv2.Close()
+
+	slots := provider.New(func() int { return 1 })
+	sm := newTestManager()
+	defer sm.Stop()
+	sm.SetProviderSlots(slots)
+
+	_, guest, err := sm.RequestStream(ShareIdentityPrefix+"abc123", "ch-y", "live", "Y", mustURL(t, srv2.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go keepDraining(sm, "ch-y", guest, stop)
+	if !receiving(sm, "ch-y", guest, 3*time.Second) {
+		t.Fatal("the share should play while the slot is free")
+	}
+	if slots.WouldGrant(provider.Share) {
+		t.Fatal("another share request must not get the slot the share holds")
+	}
+	if !slots.WouldGrant(provider.Foreground) {
+		t.Fatal("the household must be able to take the slot")
+	}
+
+	_, mine, err := sm.RequestStream("lucas", "ch-x", "live", "X", mustURL(t, srv1.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !receiving(sm, "ch-x", mine, 5*time.Second) {
+		t.Fatal("the household stream should play")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for streamActive(sm, "ch-y") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if streamActive(sm, "ch-y") {
+		t.Fatal("the share stream should stop when the household takes the slot")
+	}
+	if slots.WouldGrant(provider.Share) {
+		t.Fatal("a share must not get the slot while the household holds it")
+	}
+	removeKey(sm, "ch-x", mine)
+}

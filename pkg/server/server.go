@@ -103,6 +103,9 @@ type Config struct {
 	// (see providerSlotCapacity); never nil once the server is built.
 	providerSlots *provider.Arbiter
 
+	// shares holds the live share links (see live_shares.go).
+	shares *shareStore
+
 	// catalogFilter is the compiled catalogue filter; nil keeps everything, and
 	// every filtering path checks for nil first so it costs nothing when unset.
 	catalogFilter *filter.Set
@@ -179,6 +182,7 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		serverConfig.providerInfo = &providerInfoState{}
 	}
 	serverConfig.providerSlots = provider.New(serverConfig.providerSlotCapacity)
+	serverConfig.shares = newShareStore()
 
 	// Force PostgreSQL initialization (sqlite removed)
 	utils.InfoLog("Bootstrap: Forcing PostgreSQL database initialization")
@@ -423,6 +427,12 @@ func (c *Config) Serve() error {
 	// always served from cache instead of waiting on the provider.
 	providerInfoStop := make(chan struct{})
 	c.startProviderInfoRefresher(providerInfoStop)
+
+	// Share links: load them, and cut viewers of links that end or are revoked.
+	c.loadLiveShares()
+	shareSweepStop := make(chan struct{})
+	c.startLiveShareSweeper(shareSweepStop)
+	defer close(shareSweepStop)
 	defer close(providerInfoStop)
 
 	// Drop expired LDAP auth-cache entries so they do not linger for the life of
@@ -493,6 +503,10 @@ func (c *Config) Serve() error {
 	// Add temporary link download route
 	router.GET("/download/:token", c.handleTemporaryLink)
 
+	// Live share links: the token is the credential (see live_shares.go).
+	router.GET("/share/:token", c.handleSharePlaylist)
+	router.GET("/share/:token/live.ts", c.handleShareStream)
+
 	// Container readiness endpoint for the Docker HEALTHCHECK. Reports whether
 	// THIS service has finished starting (see the ready flag set below), never
 	// provider/VPN state, so it is safe to gate compose ordering on.
@@ -554,7 +568,8 @@ func (c *Config) redactRequestURI(u *url.URL, route string) string {
 	segs := strings.Split(u.Path, "/")
 	routeSegs := strings.Split(route, "/")
 	for i, seg := range segs {
-		if secrets[seg] || (i < len(routeSegs) && routeSegs[i] == ":password") {
+		// :token segments are credentials too (share and download links).
+		if secrets[seg] || (i < len(routeSegs) && (routeSegs[i] == ":password" || routeSegs[i] == ":token")) {
 			segs[i] = "***"
 		}
 	}

@@ -695,6 +695,33 @@ func (cl *streamClient) stalled() bool {
 }
 
 // userClientKeys returns the keys of username's clients on this buffer.
+// ShareIdentityPrefix starts the internal username of a share link's viewers
+// ("share:<token prefix>"). A share has its own identity rather than its
+// creator's, so a guest's stream never counts as one of the creator's devices
+// (which would let either stop the other's channel on a switch).
+const ShareIdentityPrefix = "share:"
+
+// IsShareIdentity reports whether username is a share link's identity.
+func IsShareIdentity(username string) bool {
+	return strings.HasPrefix(username, ShareIdentityPrefix)
+}
+
+// audienceClass is the provider-slot priority of this stream: Foreground while
+// any household client watches, Share while only share-link clients do,
+// Background when nobody does.
+func (b *StreamBuffer) audienceClass() provider.Class {
+	b.clientsLock.RLock()
+	defer b.clientsLock.RUnlock()
+	class := provider.Background
+	for _, cl := range b.clients {
+		if !IsShareIdentity(cl.user) {
+			return provider.Foreground
+		}
+		class = provider.Share
+	}
+	return class
+}
+
 func (b *StreamBuffer) userClientKeys(username string) []string {
 	b.clientsLock.RLock()
 	defer b.clientsLock.RUnlock()
@@ -777,12 +804,14 @@ func (sm *SessionManager) streamToClients(buffer *StreamBuffer, upstreamURL *url
 	}()
 
 	// Hold a provider slot for the life of the stream. It is in the
-	// foreground while anyone watches, so a background VOD download holding
+	// foreground while the household watches (Share while only share-link
+	// viewers do, so the household can take it back), so a background VOD
+	// download holding
 	// the provider's only connection is paused to make room. If the slot is
 	// taken back for another watched stream (the provider cannot serve both),
 	// this stream stops; its players reconnect if they still want it.
-	lease, slotErr := sm.providerSlots.Acquire(ctx, "live "+sm.streamLabel(buffer.streamID),
-		func() bool { return sm.viewerCount(buffer) > 0 }, provider.Fresh)
+	lease, slotErr := sm.providerSlots.AcquireClass(ctx, "live "+sm.streamLabel(buffer.streamID),
+		func() provider.Class { return buffer.audienceClass() }, provider.Fresh)
 	if slotErr != nil {
 		buffer.markReady(classifyUpstream(slotErr, 0))
 		sm.stopStreamLocking(buffer.streamID)

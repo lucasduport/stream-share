@@ -241,6 +241,8 @@ StreamShare includes a powerful Discord bot for content discovery and streaming.
 |---------|-------------|
 | `/link <ldap_username>` | Link your Discord account with your LDAP username |
 | `/watch <query> [days]` | Search movies and series; pick from a dropdown to get a download link. The item is cached automatically for 1–14 days (default 7). Supports queries like `show s02e04` |
+| `/share <channel> <until> [start]` | Share a live channel for a time window: pick the channel and get a link for VLC or an IPTV app (see [Live Share Links](#live-share-links)) |
+| `/shares` | List your share links (admins: every link) and revoke them |
 | `/library` | List cached items and expiration times |
 | `/help` | Show all available commands and usage |
 | `/status` | Show server status — active streams, viewers, and your provider subscription's state (admin only) |
@@ -282,6 +284,10 @@ StreamShare exposes an internal API (used by the Discord bot and admin tools) un
 | `/api/internal/cache/list` | GET | List active cache entries | X-API-Key |
 | `/api/internal/history?hours=N&limit=N&offset=N` | GET | Chronological watch-history feed across all users, paginated | X-API-Key |
 | `/api/internal/history/:username?hours=N&limit=N&offset=N` | GET | Watch history for one user, paginated | X-API-Key |
+| `/api/internal/shares` | POST | Create a live share link: `{username, stream_id, starts_at?, ends_at}` (RFC 3339; `starts_at` defaults to now) | X-API-Key |
+| `/api/internal/shares?username=` | GET | List share links (all when `username` is empty) with their state and URLs | X-API-Key |
+| `/api/internal/shares/:token?username=` | DELETE | Revoke a share link and disconnect its viewers; with `username`, only its creator may | X-API-Key |
+| `/api/internal/shares/channels?q=` | GET | Live channels offered to players whose name contains every word of `q` (for the Discord picker) | X-API-Key |
 | `/api/internal/instance` | GET | Identify this deployment (name, uptime, enabled features) — for labeling data in a multi-instance dashboard | X-API-Key |
 | `/api/internal/stats?hours=N` | GET | Aggregate dashboard stats: live activity plus historical totals and top titles/users over the window (default 24h, `hours=0` for all-time) | X-API-Key |
 | `/api/internal/provider` | GET | Your IPTV provider's own view of the subscription behind this instance: status, expiry, trial flag, connection limit and usage — see [Provider subscription info](#provider-subscription-info) | X-API-Key |
@@ -466,6 +472,22 @@ Behavior:
 - Otherwise, the request is proxied from the provider.
 
 Temporary links are perfect for sharing VOD content with users who don't have StreamShare accounts. Control lifetime with `TEMP_LINK_HOURS`.
+
+### Live Share Links
+
+Share one live channel with someone for a scheduled window, without giving them an account: `/share channel:<name> until:<end> [start:<start>]` in Discord picks the channel and returns a link.
+
+```
+https://streamshare.example.com/share/<token>.m3u      # one-channel playlist (VLC, IPTV apps)
+https://streamshare.example.com/share/<token>/live.ts  # the stream itself
+```
+
+- **Window:** the link plays from `start` (default now) until `until`, at most 24 hours. Times are read in the server's time zone (`TZ`): `21:00`, `tomorrow 21:00` / `demain 21:00`, `2026-11-02 21:00`; `until` also takes a duration (`2h`, `90m`, `1h30`). The playlist can be fetched before the window opens, so a guest can set it up in advance; the stream answers 403 until then, and 410 once the link ends or is revoked. Viewers still connected when it ends are cut within a few seconds.
+- **On behalf of its creator:** the link has no login of its own; its viewers show up as `<creator> (share)` in `/status` and the history. Internally they get their own identity (`share:<token prefix>`), so a guest is never mistaken for one of the creator's devices.
+- **Up to 3 devices** per link at once; a 4th connection gets 429.
+- **The household comes first:** on an account with fewer provider connections than viewers (see `PROVIDER_MAX_CONNECTIONS`), household viewing takes the connection back from a share stream, and a share never takes it from the household — the guest gets 503 "busy" instead. A guest watching the same channel as the household shares its provider connection and costs nothing.
+- **Catalogue filter:** only channels offered to players can be shared or played through a link.
+- `/shares` lists your links (admins: all of them) with revoke buttons. Links are stored in the database and survive restarts; without a database they live in memory only.
 
 ### VOD Caching
 

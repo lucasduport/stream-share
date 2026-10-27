@@ -39,6 +39,19 @@ func (b *Bot) commandSpecs() []*discordgo.ApplicationCommand {
 			},
 		},
 		{
+			Name:        "share",
+			Description: "Share a live channel for a time window with a link (VLC / IPTV app)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{Type: discordgo.ApplicationCommandOptionString, Name: "channel", Description: "Channel name to search", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "until", Description: "End: 23:00, tomorrow 01:00, 2026-11-02 23:00, or a duration (2h, 90m)", Required: true},
+				{Type: discordgo.ApplicationCommandOptionString, Name: "start", Description: "Start (default now): 21:00, tomorrow 21:00 / demain 21:00, 2026-11-02 21:00", Required: false},
+			},
+		},
+		{
+			Name:        "shares",
+			Description: "List your share links and revoke them",
+		},
+		{
 			Name:        "library",
 			Description: "List cached items and when they expire",
 		},
@@ -232,6 +245,12 @@ func (b *Bot) handleApplicationCommand(s *discordgo.Session, i *discordgo.Intera
 		ackEphemeral(s, i, "Searching…")
 		mc := toMessageCreateFromInteraction(i, "")
 		b.handleVOD(s, mc, strings.Fields(query), days)
+
+	case "share":
+		b.handleShareCommand(s, i)
+
+	case "shares":
+		b.handleSharesList(s, i)
 
 	case "library":
 		ackEphemeral(s, i, "Fetching library…")

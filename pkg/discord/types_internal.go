@@ -44,6 +44,10 @@ type Bot struct {
 	pendingVODSelect map[string]*vodSelectContext // messageID -> selection context
 	selectLock       sync.RWMutex
 
+	// /share channel pickers waiting for a selection
+	pendingShareSelect map[string]*shareSelectContext // messageID -> context
+	shareLock          sync.Mutex
+
 	// Retry contexts for failed operations (search / download / cache start)
 	pendingRetry map[string]*retryContext // messageID -> retry context
 	retryLock    sync.RWMutex
