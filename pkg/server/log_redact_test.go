@@ -36,6 +36,9 @@ func TestRedactRequestURIMasksCredentials(t *testing.T) {
 	}{
 		{"provider creds in path", "/live/provuser/provpass/123.ts", "/live/provuser/provpass/:id", []string{"provuser", "provpass"}, "123.ts"},
 		{"ldap creds by route param", "/movie/alice/s3cret/42.mkv", "/movie/:username/:password/:id", []string{"s3cret"}, "42.mkv"},
+		{"share token", "/share/abcdefghijklmnopqrstuv/live.ts", "/share/:token/live.ts", []string{"abcdefghijklmnopqrstuv"}, "/live.ts"},
+		{"share playlist token", "/share/abcdefghijklmnopqrstuv.m3u", "/share/:token", []string{"abcdefghijklmnopqrstuv"}, "/share/"},
+		{"download token", "/download/abcdef123456", "/download/:token", []string{"abcdef123456"}, "/download/"},
 		{"query creds", "/player_api.php?username=alice&password=s3cret&action=get_vod_streams", "/player_api.php", []string{"alice", "s3cret"}, "get_vod_streams"},
 		{"unmatched route still masks known secrets", "/nope/provuser/provpass", "", []string{"provuser", "provpass"}, "/nope/"},
 	}

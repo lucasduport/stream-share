@@ -119,7 +119,9 @@ func NewBot(token, adminRoleID, apiURL, apiKey string) (*Bot, error) {
 		slowClient:       &http.Client{Timeout: 90 * time.Second},
 		pendingVODSelect: make(map[string]*vodSelectContext),
 		pendingRetry:     make(map[string]*retryContext),
-		stopChan:         make(chan struct{}),
+
+		pendingShareSelect: make(map[string]*shareSelectContext),
+		stopChan:           make(chan struct{}),
 	}
 
 	// Optional: dev guild for registering guild-scoped commands during development
@@ -201,6 +203,7 @@ func (b *Bot) cleanupRoutine() {
 			return
 		case <-ticker.C:
 			b.cleanupExpiredVODSelects()
+			b.cleanupExpiredShareSelects()
 			b.cleanupExpiredRetries()
 		}
 	}

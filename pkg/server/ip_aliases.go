@@ -54,6 +54,9 @@ func (c *Config) loadIPAliasMap() map[string]string {
 // checked against the configured aliases only when it parses as an IP
 // address — an LDAP username needs no resolution and is returned unchanged.
 func displayNameFor(identifier string, aliases map[string]string) string {
+	if name, ok := shareDisplayName(identifier); ok {
+		return name
+	}
 	if net.ParseIP(identifier) == nil {
 		return identifier
 	}

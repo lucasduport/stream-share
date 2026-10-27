@@ -125,6 +125,46 @@ type TemporaryLink struct {
 	Title     string
 }
 
+// LiveShare is a scheduled share link to one live channel: anyone holding the
+// token may watch that channel between StartsAt and EndsAt, on behalf of
+// CreatedBy (a household user), until it ends or is revoked.
+type LiveShare struct {
+	Token     string `json:"token"`
+	StreamID  string `json:"stream_id"`
+	Title     string `json:"title"`
+	CreatedBy string `json:"created_by"`
+	// Guest optionally names who the link is for, to tell links apart.
+	Guest     string     `json:"guest,omitempty"`
+	StartsAt  time.Time  `json:"starts_at"`
+	EndsAt    time.Time  `json:"ends_at"`
+	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
+// Share link states, see LiveShare.State.
+const (
+	ShareScheduled = "scheduled"
+	ShareActive    = "active"
+	ShareEnded     = "ended"
+	ShareRevoked   = "revoked"
+)
+
+// State is the share's state at now: revoked, then before the window
+// (scheduled), inside it (active) or after it (ended). The window is
+// [StartsAt, EndsAt).
+func (s *LiveShare) State(now time.Time) string {
+	switch {
+	case s.RevokedAt != nil:
+		return ShareRevoked
+	case now.Before(s.StartsAt):
+		return ShareScheduled
+	case !now.Before(s.EndsAt):
+		return ShareEnded
+	default:
+		return ShareActive
+	}
+}
+
 // APIResponse is a standardized API response structure
 type APIResponse struct {
 	Success bool        `json:"success"`

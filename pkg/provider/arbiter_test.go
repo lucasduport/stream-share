@@ -245,3 +245,67 @@ func TestStuckHolderDoesNotBlockForeverAfterGrace(t *testing.T) {
 		t.Fatal("stuck holder was not asked to pause")
 	}
 }
+
+func classOf(c Class) func() Class { return func() Class { return c } }
+
+// A share (guest) stream preempts a background download, but yields to the
+// household: a Foreground request takes the slot from a Share holder, and a
+// Share request never takes it from a Foreground holder.
+func TestShareClassSitsBetweenBackgroundAndForeground(t *testing.T) {
+	a := New(fixed(1))
+	ctx := context.Background()
+
+	bg, err := a.Acquire(ctx, "download", nil, Resume)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shareCh := make(chan *Lease, 1)
+	go func() {
+		l, err := a.AcquireClass(ctx, "share", classOf(Share), Fresh)
+		if err == nil {
+			shareCh <- l
+		}
+	}()
+	if !preempted(bg, time.Second) {
+		t.Fatal("share should preempt the background download")
+	}
+	bg.Release()
+	share := got(shareCh, time.Second)
+	if share == nil {
+		t.Fatal("share should get the slot once the download releases it")
+	}
+
+	if !a.WouldGrant(Foreground) {
+		t.Fatal("household would preempt the share")
+	}
+	if a.WouldGrant(Share) {
+		t.Fatal("another share holds the slot at the same class: WouldGrant(Share) must be false")
+	}
+
+	fg := acquireAsync(t, a, ctx, "household", func() bool { return true }, Fresh)
+	if !preempted(share, time.Second) {
+		t.Fatal("household should preempt the share")
+	}
+	share.Release()
+	hh := got(fg, time.Second)
+	if hh == nil {
+		t.Fatal("household should get the slot")
+	}
+
+	if a.WouldGrant(Share) {
+		t.Fatal("a share must not get the slot while the household holds it")
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, 600*time.Millisecond)
+	defer cancel()
+	if l, err := a.AcquireClass(waitCtx, "share-again", classOf(Share), Fresh); err == nil {
+		l.Release()
+		t.Fatal("a Fresh share request must not preempt the household")
+	}
+	if hh.IsPreempted() {
+		t.Fatal("the household lease was preempted by a share")
+	}
+	if s := a.Snapshot(); len(s.Held) != 1 || s.Held[0].Class != "foreground" {
+		t.Fatalf("snapshot = %+v", s)
+	}
+	hh.Release()
+}

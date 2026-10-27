@@ -87,6 +87,12 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 	api.GET("/cache/progress/:streamid", c.getCacheProgress)
 	api.GET("/cache/list", c.listCache)
 
+	// Live share links (created from Discord /share)
+	api.POST("/shares", c.createShareAPI)
+	api.GET("/shares", c.listSharesAPI)
+	api.GET("/shares/channels", c.shareChannelsAPI)
+	api.DELETE("/shares/:token", c.revokeShareAPI)
+
 	// Status summary for Discord and dashboards
 	api.GET("/status", c.statusSummary)
 
