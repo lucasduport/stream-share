@@ -346,33 +346,3 @@ func (m *DBManager) GetTopUsers(since time.Time, limit int) ([]UserStat, error) 
 	}
 	return out, rows.Err()
 }
-
-// GetStreamHistoryStats gets statistics about stream usage
-func (m *DBManager) GetStreamHistoryStats() (map[string]interface{}, error) {
-	utils.DebugLog("Database: Getting stream history statistics")
-	if m == nil || m.db == nil {
-		return nil, fmt.Errorf("database not initialized")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	stats := make(map[string]interface{})
-	var totalStreams int
-	if err := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM stream_history").Scan(&totalStreams); err != nil {
-		utils.ErrorLog("Database error counting streams: %v", err)
-		return nil, err
-	}
-	stats["total_streams"] = totalStreams
-
-	var activeUsers int
-	if err := m.db.QueryRowContext(ctx, `
-        SELECT COUNT(DISTINCT username) FROM stream_history WHERE start_time > $1
-    `, time.Now().Add(-24*time.Hour)).Scan(&activeUsers); err != nil {
-		utils.ErrorLog("Database error counting active users: %v", err)
-		return nil, err
-	}
-	stats["active_users_24h"] = activeUsers
-
-	return stats, nil
-}

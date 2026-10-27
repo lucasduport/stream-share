@@ -308,12 +308,71 @@ func (c *Config) ensureVODM3UCache() (string, error) {
 		c.startVODM3URefresh()
 		return "", errVODM3UNotReady
 	}
-	if age := time.Since(info.ModTime()); age.Hours() >= float64(c.M3UCacheExpiration) {
+	if age := time.Since(info.ModTime()); age >= c.vodM3UMaxAge() {
 		if c.startVODM3URefresh() != nil {
 			utils.DebugLog("Using stale VOD M3U while refreshing in background: %s (age: %v)", cacheFile, age)
 		}
 	}
 	return cacheFile, nil
+}
+
+// vodM3UMinMaxAge is the shortest refresh period of the VOD M3U. It only backs
+// extension and title fallbacks (players' URLs carry the extension, and titles
+// come from get_vod_info / get_series_info first), so refetching the whole
+// multi-hundred-MB playlist hourly bought nothing; a fresh get.php download
+// also refreshes it for free (see shareGetPHPAsVODM3U).
+const vodM3UMinMaxAge = 24 * time.Hour
+
+// vodM3UMaxAge is the age past which the VOD M3U is refreshed: the M3U cache
+// expiration, but never less than vodM3UMinMaxAge.
+func (c *Config) vodM3UMaxAge() time.Duration {
+	if d := time.Duration(c.M3UCacheExpiration) * time.Hour; d > vodM3UMinMaxAge {
+		return d
+	}
+	return vodM3UMinMaxAge
+}
+
+// shareGetPHPAsVODM3U installs a freshly downloaded get.php playlist as the VOD
+// M3U, so the same catalogue is not downloaded a second time. The VOD M3U is
+// only read through the stream index (ids, extensions, titles), which the
+// credential rewrite does not affect; the playlist must however be complete,
+// so a filtered or deduplicated one, or a partial query, is not shared. The
+// file is hard-linked (no copy); when that is not possible nothing is shared.
+func (c *Config) shareGetPHPAsVODM3U(rawURL, path string) {
+	if c.M3UDedupEnabled || c.catalogFilter.Active() {
+		return
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return
+	}
+	for k, v := range u.Query() {
+		switch k {
+		case "username", "password", "output":
+		case "type":
+			if t := strings.ToLower(strings.Join(v, "")); t != "m3u_plus" && t != "m3u" {
+				return
+			}
+		default:
+			return // a narrowed playlist (category, ...) is not the whole catalogue
+		}
+	}
+	dest := vodM3UCachePath()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return
+	}
+	tmp := dest + ".link"
+	_ = os.Remove(tmp)
+	if err := os.Link(path, tmp); err != nil {
+		utils.DebugLog("VOD M3U: cannot share the get.php playlist (%v); it refreshes on its own", err)
+		return
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return
+	}
+	utils.InfoLog("VOD M3U refreshed from the get.php download (no second provider download)")
+	warmStreamIndex(dest)
 }
 
 // vodM3UCached reports whether a VOD M3U has been downloaded at least once.
@@ -367,6 +426,8 @@ func (c *Config) startVODM3URefresh() *vodM3UFetch {
 		if f.err != nil {
 			vodM3UFailedAt = time.Now()
 			utils.WarnLog("VOD M3U download failed (next attempt in %v): %v", vodM3UFailBackoff, f.err)
+		} else {
+			warmStreamIndex(vodM3UCachePath())
 		}
 		vodM3UMu.Unlock()
 		close(f.done)
@@ -509,6 +570,9 @@ func allTokensIn(tokens []string, hay string) bool {
 	return true
 }
 
+// maxSeriesInfoLookups caps the get_series_info calls one series search makes.
+const maxSeriesInfoLookups = 40
+
 // searchXtreamSeries searches series and flattens episodes matching the query.
 // The get_series catalog is cached (parsed) so repeated searches do not
 // re-download the full catalog; get_series_info calls for matching series are
@@ -571,6 +635,16 @@ func (c *Config) searchXtreamSeries(query string) ([]types.VODResult, error) {
 			genre: fmt.Sprintf("%v", m["genre"]),
 			year:  fmt.Sprintf("%v", firstNonEmpty(m["releaseDate"], m["release_date"])),
 		})
+	}
+
+	// Each match costs a get_series_info round trip, so a short query matching
+	// thousands of series would hammer the provider. Keep the closest matches:
+	// with every query token in the name, the shortest names are the ones the
+	// query describes best.
+	if len(matches) > maxSeriesInfoLookups {
+		sort.SliceStable(matches, func(i, j int) bool { return len(matches[i].name) < len(matches[j].name) })
+		utils.InfoLog("Series search: %d series match %q; looking up the %d closest", len(matches), q, maxSeriesInfoLookups)
+		matches = matches[:maxSeriesInfoLookups]
 	}
 
 	// Second pass: fetch get_series_info for all matches with bounded

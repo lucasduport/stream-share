@@ -174,20 +174,3 @@ func levelToString(level LogLevel) string {
 		return "UNKNOWN"
 	}
 }
-
-// // PrintErrorAndReturn is a convenience function for returning errors
-// func PrintErrorAndReturn(err error) error {
-// 	ErrorLog("%v", err)
-// 	return err
-// }
-
-// CreateSampleStreamData creates sample stream data for testing
-func CreateSampleStreamData() map[string]interface{} {
-	// This function helps create test data for debugging
-	return map[string]interface{}{
-		"active_streams": 3,
-		"popular_stream": "CNN",
-		"peak_time":      "20:00-22:00",
-		"total_bytes":    "2.3 GB",
-	}
-}

@@ -26,9 +26,6 @@ import (
 	"github.com/lucasduport/stream-share/pkg/filter"
 )
 
-// Add Debugging Logging option
-var DebugLoggingEnabled bool
-
 // Set a Cache Folder to save responses into
 var CacheFolder string
 

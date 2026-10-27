@@ -45,6 +45,9 @@ type streamIndexEntry struct {
 var (
 	m3uStreamIndexMu sync.RWMutex
 	m3uStreamIndex   = map[string]*streamIndexState{} // filePath -> state
+	// m3uStreamIndexBuilds holds the build running per file, if any; guarded
+	// by m3uStreamIndexMu.
+	m3uStreamIndexBuilds = map[string]chan struct{}{}
 )
 
 type streamIndexState struct {
@@ -119,6 +122,11 @@ func extractBasePath(urlPath string) string {
 
 // getStreamIndex returns the cached index for filePath, rebuilding it when the
 // file's mtime has changed. Returns nil when the file cannot be stat'd or read.
+//
+// Building scans the whole file — seconds on a multi-hundred-MB catalogue — so
+// it never runs under the index lock: one build per file runs at a time, and
+// while it does, callers get the previous index (a refreshed catalogue differs
+// only marginally). Only a caller with no index at all waits for the build.
 func getStreamIndex(filePath string) map[string]streamIndexEntry {
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -132,23 +140,64 @@ func getStreamIndex(filePath string) map[string]streamIndexEntry {
 		return st.index
 	}
 
-	// Rebuild under write lock (double-check inside).
 	m3uStreamIndexMu.Lock()
-	defer m3uStreamIndexMu.Unlock()
-	if st, ok := m3uStreamIndex[filePath]; ok && st.mtime.Equal(info.ModTime()) {
+	st, ok = m3uStreamIndex[filePath]
+	if ok && st.mtime.Equal(info.ModTime()) {
+		m3uStreamIndexMu.Unlock()
 		return st.index
 	}
+	done, building := m3uStreamIndexBuilds[filePath]
+	if !building {
+		done = make(chan struct{})
+		m3uStreamIndexBuilds[filePath] = done
+		go buildStreamIndexFor(filePath, done)
+	}
+	m3uStreamIndexMu.Unlock()
 
-	f, err := os.Open(filePath)
-	if err != nil {
+	if ok {
+		return st.index // previous version, served while the new one builds
+	}
+	<-done
+	m3uStreamIndexMu.RLock()
+	st, ok = m3uStreamIndex[filePath]
+	m3uStreamIndexMu.RUnlock()
+	if !ok {
 		return nil
 	}
-	defer func() { _ = f.Close() }()
+	return st.index
+}
 
+// buildStreamIndexFor builds and stores the index of filePath, then closes
+// done. The index is recorded against the mtime of the version actually read,
+// so a file replaced during the build is picked up by the next lookup.
+func buildStreamIndexFor(filePath string, done chan struct{}) {
+	defer func() {
+		m3uStreamIndexMu.Lock()
+		delete(m3uStreamIndexBuilds, filePath)
+		m3uStreamIndexMu.Unlock()
+		close(done)
+	}()
+	f, err := os.Open(filePath)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	start := time.Now()
 	idx := buildStreamIndex(f)
+	m3uStreamIndexMu.Lock()
 	m3uStreamIndex[filePath] = &streamIndexState{mtime: info.ModTime(), index: idx}
-	utils.DebugLog("stream index: built %d entries for %s", len(idx), filePath)
-	return idx
+	m3uStreamIndexMu.Unlock()
+	utils.DebugLog("stream index: built %d entries for %s in %v", len(idx), filePath, time.Since(start).Round(time.Millisecond))
+}
+
+// warmStreamIndex builds filePath's index in the background, so the first
+// lookup after a catalogue refresh does not pay for it.
+func warmStreamIndex(filePath string) {
+	go getStreamIndex(filePath)
 }
 
 // lookupStreamIndex returns the extension and title for a given basePath +

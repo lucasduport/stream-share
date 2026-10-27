@@ -101,14 +101,6 @@ Stack Trace:
 		err)
 }
 
-// ErrorWithLocation wraps an error with location information based on detail level
-func ErrorWithLocation(err error) error {
-	if err == nil {
-		return nil
-	}
-	return formatError(err)
-}
-
 // PrintErrorAndReturn prints the error to stderr (if detail level is not None) and returns it
 func PrintErrorAndReturn(err error) error {
 	if err == nil {

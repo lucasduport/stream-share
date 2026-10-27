@@ -41,7 +41,6 @@ type StreamSession struct {
 	StreamID      string               // Stream identifier
 	StreamType    string               // Type of content (live, vod, series)
 	StreamTitle   string               // Content title
-	ProxyURL      string               // Internal proxy URL
 	UpstreamURL   string               // Upstream provider URL
 	StartTime     time.Time            // When the stream started
 	LastRequested time.Time            // Last time any user requested this stream

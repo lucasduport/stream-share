@@ -18,6 +18,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -329,13 +330,41 @@ func rewriteM3UURLLine(line, xtreamUser, xtreamPassword, localUser, localPasswor
 	return out
 }
 
+// getPHPStallTimeout aborts a get.php download that has received no bytes for
+// this long.
+const getPHPStallTimeout = 60 * time.Second
+
+// getPHPClient downloads get.php playlists. It has no overall timeout (see
+// getPHPStallTimeout); providers can take a while to start answering for a big
+// playlist. Accept-Encoding is left to the transport so it asks for gzip and
+// decompresses transparently: M3U text shrinks ~10x on the wire, which
+// dominates download time on a slow provider.
+var getPHPClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ResponseHeaderTimeout: 3 * time.Minute,
+		IdleConnTimeout:       90 * time.Second,
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
+}
+
 // fetchAndRewriteXtreamM3U downloads the provider's get.php M3U and writes a
 // credential-rewritten copy to destPath using stream rewriting (constant
 // memory). It returns the number of tracks and any error.
 func (c *Config) fetchAndRewriteXtreamM3U(rawURL, destPath string) (int64, error) {
 	utils.InfoLog("Streaming M3U from Xtream (constant-memory rewrite): %s", utils.MaskURL(rawURL))
 
-	req, err := http.NewRequest("GET", rawURL, nil)
+	// No overall deadline (a big playlist from a slow provider takes minutes
+	// while still making progress), but a body that stops arriving is aborted:
+	// otherwise a stalled provider would leave the refresh hanging forever.
+	reqCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", rawURL, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -345,25 +374,17 @@ func (c *Config) fetchAndRewriteXtreamM3U(rawURL, destPath string) (int64, error
 	// decompresses transparently: M3U text shrinks ~10x on the wire, which
 	// dominates download time on a slow provider.
 
-	client := &http.Client{
-		Timeout: 0, // no global timeout; the download may take minutes for 400+ MB
-		Transport: &http.Transport{
-			ResponseHeaderTimeout: 60 * time.Second,
-			IdleConnTimeout:       90 * time.Second,
-		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-
-	resp, err := client.Do(req)
+	resp, err := getPHPClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("M3U fetch failed: %w", err)
+		return 0, fmt.Errorf("M3U fetch failed: %w", stripURLError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
+	stall := time.AfterFunc(getPHPStallTimeout, cancel)
+	defer stall.Stop()
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{&stallReader{r: resp.Body, timer: stall, idle: getPHPStallTimeout}, resp.Body}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return 0, fmt.Errorf("backend returned %d for M3U request", resp.StatusCode)
