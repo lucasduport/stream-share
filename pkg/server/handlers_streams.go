@@ -42,6 +42,7 @@ type ViewerInfo struct {
 // effort technical audio/video info from stream_probe.go.
 type activeStreamItem struct {
 	StreamID     string          `json:"stream_id"`
+	Num          int             `json:"num,omitempty"` // channel number players show (live only, when known)
 	StreamType   string          `json:"stream_type"`
 	StreamTitle  string          `json:"stream_title"`
 	EPGChannelID string          `json:"epg_channel_id,omitempty"`
@@ -94,6 +95,9 @@ func (c *Config) buildActiveStreamItem(s *types.StreamSession, aliases map[strin
 		Viewers:      viewerInfos,
 		StartedAt:    s.StartTime,
 		Duration:     dur.String(),
+	}
+	if s.StreamType == "live" {
+		item.Num, _ = c.liveChannelNumber(s.StreamID)
 	}
 
 	switch s.StreamType {
