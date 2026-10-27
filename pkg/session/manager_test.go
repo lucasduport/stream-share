@@ -435,3 +435,21 @@ func TestRemoveClient_concurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// HasVODViewer is false for the first request of a VOD view and true for the
+// following Range requests of the same view, which is what keeps per-request
+// logging to one line per playback.
+func TestHasVODViewerOnlyFirstRequestIsNew(t *testing.T) {
+	sm := newTestManager()
+	defer sm.Stop()
+	if sm.HasVODViewer("alice", "42") {
+		t.Fatal("no view yet")
+	}
+	sm.RegisterVODView("alice", "42", "series", "Some Show")
+	if !sm.HasVODViewer("alice", "42") {
+		t.Fatal("second request of the view should find the viewer")
+	}
+	if sm.HasVODViewer("bob", "42") {
+		t.Fatal("another user's first request is a new view")
+	}
+}

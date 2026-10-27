@@ -203,7 +203,9 @@ The filter applies to everything players get:
 - the guide (`xmltv.php`), when live rules are set: only the kept channels and their programmes. Until the live list has been fetched once, the full guide is served;
 - live streams: a channel the filter drops answers 404, even asked by its id. Ids the cached live list does not know are let through.
 
-What it does not apply to: the Discord `/watch` search (an admin tool that keeps searching the whole catalogue), movie and series streams by id (their lists can be too large, or empty on some providers, to check every request against), `get.php` tracks that are neither a movie nor a series (bare stream addresses, radio links) are treated as live channels.
+The Discord `/watch` search uses the same rules: it only finds movies and series players are offered.
+
+What it does not apply to: movie and series streams by id (their lists can be too large, or empty on some providers, to check every request against), `get.php` tracks that are neither a movie nor a series (bare stream addresses, radio links) are treated as live channels.
 
 ### Xtream Codes API Compatibility
 

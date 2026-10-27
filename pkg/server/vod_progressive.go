@@ -515,7 +515,13 @@ func (c *Config) serveVODDownload(ctx *gin.Context, dl *vodDownload, label, file
 	if ctx.Request.Method == http.MethodHead {
 		return
 	}
-	utils.InfoLog("Serving %s from in-progress cache (%s/%s, from byte %d)",
+	// Players reopen and seek many times per playback: only the opening read
+	// (from the start of the file) is worth an INFO line.
+	logServe := utils.DebugLog
+	if start == 0 {
+		logServe = utils.InfoLog
+	}
+	logServe("Serving %s from in-progress cache (%s/%s, from byte %d)",
 		label, utils.HumanBytes(st.written), utils.HumanBytes(st.total), start)
 
 	buf := make([]byte, vodProgressiveChunk)

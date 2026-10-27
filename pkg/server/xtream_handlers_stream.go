@@ -368,7 +368,12 @@ func (c *Config) streamVODWithCache(ctx *gin.Context, basePath, defaultExt strin
 			if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
 				ct := contentTypeForPath(entry.FilePath)
 				c.touchVODCache(idRaw)
-				utils.InfoLog("Serving cached %s for %s from %s", basePath, c.vodLabel(idRaw), entry.FilePath)
+				// Only the opening read gets an INFO line; seeks are DEBUG.
+				logServe := utils.DebugLog
+				if rng := ctx.GetHeader("Range"); rng == "" || strings.HasPrefix(rng, "bytes=0-") {
+					logServe = utils.InfoLog
+				}
+				logServe("Serving cached %s for %s from %s", basePath, c.vodLabel(idRaw), entry.FilePath)
 				serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
 				return
 			}
