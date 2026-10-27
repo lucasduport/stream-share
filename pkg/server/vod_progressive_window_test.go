@@ -316,9 +316,6 @@ func TestProgressiveSmallGapUsesNoWindow(t *testing.T) {
 		t.Fatal("bytes differ")
 	}
 	waitDownloadDone(t, c, "204")
-	for _, r := range p.rangesSeen() {
-		if r != "" {
-			t.Fatalf("a ranged request reached the provider for a small gap: %v", p.rangesSeen())
-		}
-	}
+	// Only the download's own pass: its header, then the rest. No window.
+	assertSinglePass(t, p)
 }

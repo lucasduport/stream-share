@@ -173,11 +173,29 @@ func cachedFile(t *testing.T, id string) []byte {
 	return b
 }
 
-// resumedFromMiddle reports whether one of the ranges resumes a download past
-// its start (bytes=N- with N > 0), i.e. the download was paused and resumed.
+// resumedFromMiddle reports whether the download was paused and resumed: it
+// asked twice for what is left of the file (bytes=N- with N > 0), or asked
+// twice for the same bounded range (a fetch of the file's end cut short by
+// the pause). A download that is never paused asks for its header, its end
+// and the rest once each.
 func resumedFromMiddle(ranges []string) bool {
+	openEnded := 0
+	bounded := map[string]int{}
 	for _, r := range ranges {
-		if strings.HasPrefix(r, "bytes=") && strings.HasSuffix(r, "-") && r != "bytes=0-" {
+		if !strings.HasPrefix(r, "bytes=") || r == "bytes=0-" {
+			continue
+		}
+		if strings.HasSuffix(r, "-") {
+			openEnded++
+		} else {
+			bounded[r]++
+		}
+	}
+	if openEnded >= 2 {
+		return true
+	}
+	for _, n := range bounded {
+		if n >= 2 {
 			return true
 		}
 	}

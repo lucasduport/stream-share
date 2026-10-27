@@ -48,6 +48,13 @@ import (
 // that byte range from the provider with a Range request, then resumes where it
 // stopped. The provider still sees a single connection at a time, and the
 // player gets its bytes within moments instead of after the whole file.
+//
+// The usual opening (header, index at the end, back to the start) needs no
+// interruption at all: the download asks for the header, then the end of the
+// file, then the rest, one after the other on one keep-alive connection (see
+// fetchToFile). Providers that allow a single connection count a closed one
+// for a while and cut the oldest open one when over their limit, so every
+// connection closed and reopened in a burst risks the live one being cut.
 
 var (
 	// vodProgressiveHeaderWait bounds how long a request waits for the
@@ -282,6 +289,14 @@ func (d *vodDownload) requestWindow(off int64) {
 	case d.wake <- struct{}{}:
 	default:
 	}
+}
+
+// windowsDisabled reports whether windows are off for this download (the
+// provider ignored a ranged request, or windows kept failing).
+func (d *vodDownload) windowsDisabled() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.noWindows
 }
 
 // windowWanted reports whether a reader waits for a window.
