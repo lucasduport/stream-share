@@ -489,6 +489,9 @@ func (c *Config) Serve() error {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	router := gin.New()
+	if err := c.applyTrustedProxies(router); err != nil {
+		return fmt.Errorf("invalid trusted proxy list: %w", err)
+	}
 	if utils.IsDebugLogEnabled() {
 		router.Use(gin.Logger())
 	} else {
