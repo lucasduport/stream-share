@@ -238,3 +238,16 @@ func TestClientAccountInfoHonorsContextCancellation(t *testing.T) {
 		t.Fatalf("error = %v, want the context deadline to surface", err)
 	}
 }
+
+func TestParseAccountInfoServerTimestamp(t *testing.T) {
+	for _, v := range []string{`1762791684`, `"1762791684"`} {
+		body := `{"user_info": {"auth": 1}, "server_info": {"timestamp_now": ` + v + `, "time_now": "2026-11-10 17:21:24"}}`
+		info, err := parseAccountInfo([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.ServerTimestamp != 1762791684 || info.ServerTime != "2026-11-10 17:21:24" {
+			t.Errorf("timestamp_now %s: ServerTimestamp=%d ServerTime=%q", v, info.ServerTimestamp, info.ServerTime)
+		}
+	}
+}

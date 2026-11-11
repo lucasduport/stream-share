@@ -150,7 +150,7 @@ func (c *Config) xtreamStreamTimeshift(ctx *gin.Context) {
 	// Proxy upstream if catchup is disabled or the channel has native upstream support.
 	if c.catchupManager == nil || !c.catchupManager.IsEnabled() || c.catchupManager.HasUpstreamCatchup(idRaw) {
 		rpURL, err := url.Parse(fmt.Sprintf("%s/timeshift/%s/%s/%s/%s/%s",
-			c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, duration, start, idRaw))
+			c.XtreamBaseURL, c.XtreamUser, c.XtreamPassword, duration, providerTimeshiftStart(start, c.providerLocation()), idRaw))
 		if err != nil {
 			_ = ctx.AbortWithError(http.StatusInternalServerError, utils.PrintErrorAndReturn(err))
 			return
@@ -212,15 +212,16 @@ func (c *Config) xtreamStreamTimeshift(ctx *gin.Context) {
 }
 
 // parseTimeshiftStart parses a timeshift start parameter.
-// TiviMate sends "YYYY-MM-DD:HH-MM" in local time; time.Local is used, which Go
-// initialises from the TZ environment variable at startup. Set TZ in the container
-// (e.g. TZ=Europe/Amsterdam) so that local timestamps are interpreted correctly.
-// Unix timestamp integers are also accepted and are always timezone-independent.
+// TiviMate-style players send "YYYY-MM-DD:HH-MM"; it is read as UTC, so leave
+// the player's time adjustment at +0. When the request is proxied to the
+// provider, providerTimeshiftStart converts it to the zone the provider
+// expects (see timeshift_tz.go). Unix timestamp integers are also accepted
+// and are always timezone-independent.
 func parseTimeshiftStart(start string) (time.Time, error) {
 	if n, err := strconv.ParseInt(start, 10, 64); err == nil {
 		return time.Unix(n, 0), nil
 	}
-	return time.ParseInLocation("2006-01-02:15-04", start, time.Local)
+	return time.ParseInLocation(timeshiftLayout, start, time.UTC)
 }
 
 // alignToTSPacket seeks f to startOffset then scans forward (up to 3 packet-widths) for

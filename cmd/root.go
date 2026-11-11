@@ -160,6 +160,7 @@ It supports:
 			CatchupEnabled:           viper.GetBool("catchup-enabled"),
 			CatchupDurationHours:     viper.GetInt("catchup-duration-hours"),
 			CatchupPauseGraceMinutes: viper.GetInt("catchup-pause-grace-minutes"),
+			CatchupProviderTimezone:  viper.GetString("catchup-provider-timezone"),
 
 			// Error slate
 			ErrorSlateEnabled:         viper.GetBool("error-slate-enabled"),
@@ -303,6 +304,7 @@ func init() {
 	// Catchup configuration
 	rootCmd.Flags().Bool("catchup-enabled", false, "Enable local catchup buffering for live streams")
 	rootCmd.Flags().Int("catchup-duration-hours", 4, "Number of hours of catchup buffer to retain")
+	rootCmd.Flags().String("catchup-provider-timezone", "", "IANA time zone the provider expects catchup times in (e.g. Europe/Amsterdam); empty = use the provider's reported zone")
 	rootCmd.Flags().Int("catchup-pause-grace-minutes", 5, "Minutes a catchup live stream keeps recording after the last viewer disconnects")
 
 	// Error slate configuration
