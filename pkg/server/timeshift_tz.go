@@ -27,7 +27,6 @@ import (
 	_ "time/tzdata" // the Alpine image ships no zoneinfo
 
 	"github.com/lucasduport/stream-share/pkg/utils"
-	xtreamapi "github.com/lucasduport/stream-share/pkg/xtream"
 )
 
 const timeshiftLayout = "2006-01-02:15-04"
@@ -78,12 +77,7 @@ func (c *Config) resolveProviderLocation() (*time.Location, string) {
 			return loc, "setting"
 		}
 	}
-	var info *xtreamapi.AccountInfo
-	if st := c.providerInfo; st != nil {
-		st.mu.Lock()
-		info = st.info
-		st.mu.Unlock()
-	}
+	info := c.providerAccountCached().Info
 	if info == nil {
 		return time.UTC, "default"
 	}
@@ -98,17 +92,16 @@ func (c *Config) resolveProviderLocation() (*time.Location, string) {
 	}
 	if info.ServerTime != "" && info.ServerTimestamp != 0 {
 		if local, err := time.Parse("2006-01-02 15:04:05", info.ServerTime); err == nil {
-			const quarter = 15 * 60
-			off := local.Unix() - info.ServerTimestamp
-			off = (off + quarter/2) / quarter * quarter // rounds half up; clocks drift by seconds
+			// Clocks drift by seconds; Round is symmetric for negative offsets.
+			off := (time.Duration(local.Unix()-info.ServerTimestamp) * time.Second).Round(15 * time.Minute)
 			if off == 0 {
 				return time.UTC, "provider clock"
 			}
-			h, m := off/3600, off%3600/60
-			if m < 0 {
-				m = -m
+			sign, abs := '+', off
+			if off < 0 {
+				sign, abs = '-', -off
 			}
-			return time.FixedZone(fmt.Sprintf("provider%+03d:%02d", h, m), int(off)), "provider clock"
+			return time.FixedZone(fmt.Sprintf("provider%c%02d:%02d", sign, int(abs.Hours()), int(abs.Minutes())%60), int(off.Seconds())), "provider clock"
 		}
 	}
 	return time.UTC, "default"
