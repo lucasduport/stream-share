@@ -20,6 +20,9 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +62,10 @@ func TestProviderLocation(t *testing.T) {
 		ServerTime:      "2026-11-10 17:21:24",
 		ServerTimestamp: time.Date(2026, 11, 10, 16, 21, 24, 0, time.UTC).Unix(),
 	}
+	clockAt := func(local, utc string) *xtreamapi.AccountInfo {
+		u, _ := time.Parse(time.RFC3339, utc)
+		return &xtreamapi.AccountInfo{ServerTime: local, ServerTimestamp: u.Unix()}
+	}
 	cases := []struct {
 		name    string
 		setting string
@@ -68,7 +75,9 @@ func TestProviderLocation(t *testing.T) {
 		{"setting beats provider", "Europe/Amsterdam", &xtreamapi.AccountInfo{ServerTimezone: "Africa/Dakar"}, "Europe/Amsterdam"},
 		{"unknown setting falls through", "Mars/Base", &xtreamapi.AccountInfo{ServerTimezone: "Africa/Dakar"}, "Africa/Dakar"},
 		{"provider zone", "", &xtreamapi.AccountInfo{ServerTimezone: "Africa/Dakar"}, "Africa/Dakar"},
-		{"provider clock", "", clock, "+3600"},
+		{"provider clock", "", clock, "provider+01:00"},
+		{"clock -01:00", "", clockAt("2026-11-10 15:21:24", "2026-11-10T16:21:24Z"), "provider-01:00"},
+		{"clock -03:30", "", clockAt("2026-11-10 12:51:24", "2026-11-10T16:21:24Z"), "provider-03:30"},
 		{"no data", "", &xtreamapi.AccountInfo{}, "UTC"},
 		{"no cache", "", nil, "UTC"},
 	}
@@ -78,17 +87,25 @@ func TestProviderLocation(t *testing.T) {
 		loc := c.providerLocation()
 		_, off := time.Date(2026, 11, 10, 12, 0, 0, 0, loc).Zone()
 		got := loc.String()
-		if tc.want == "+3600" {
-			if off != 3600 {
-				t.Errorf("%s: offset %d, want 3600", tc.name, off)
-			}
-		} else if got != tc.want {
+		if got != tc.want {
 			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
+		}
+		if strings.HasPrefix(tc.want, "provider") {
+			wantOff := map[string]int{"provider+01:00": 3600, "provider-01:00": -3600, "provider-03:30": -12600}[tc.want]
+			if off != wantOff || c.tz.lastSource != "provider clock" {
+				t.Errorf("%s: offset %d source %q, want %d from provider clock", tc.name, off, c.tz.lastSource, wantOff)
+			}
 		}
 	}
 	// Empty cache, nil state, and nothing configured must never reach the provider.
-	c := &Config{ProxyConfig: &config.ProxyConfig{}}
-	if c.providerLocation() != time.UTC {
-		t.Error("nil providerInfo should give UTC")
+	up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("providerLocation contacted the provider")
+	}))
+	defer up.Close()
+	for _, st := range []*providerInfoState{nil, {}} {
+		c := &Config{ProxyConfig: &config.ProxyConfig{XtreamBaseURL: up.URL}, providerInfo: st}
+		if c.providerLocation() != time.UTC {
+			t.Error("nil/empty provider cache should give UTC")
+		}
 	}
 }
