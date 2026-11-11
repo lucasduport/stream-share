@@ -61,6 +61,9 @@ type AccountInfo struct {
 	AllowedOutputFormats []string
 	ServerTimezone       string
 	ServerTime           string
+	// ServerTimestamp is server_info.timestamp_now (Unix seconds); against
+	// ServerTime it reveals the provider clock's UTC offset.
+	ServerTimestamp int64
 	// FetchedAt is when this snapshot was read from the provider.
 	FetchedAt time.Time
 }
@@ -155,6 +158,7 @@ func parseAccountInfo(body []byte) (*AccountInfo, error) {
 	if si := payload.ServerInfo; si != nil {
 		info.ServerTimezone = strings.TrimSpace(fieldString(si, "timezone"))
 		info.ServerTime = strings.TrimSpace(fieldString(si, "time_now"))
+		info.ServerTimestamp = int64(fieldInt(si, "timestamp_now"))
 	}
 	return info, nil
 }

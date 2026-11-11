@@ -111,6 +111,9 @@ type ProxyConfig struct {
 	CatchupEnabled           bool
 	CatchupDurationHours     int
 	CatchupPauseGraceMinutes int
+	// CatchupProviderTimezone is the IANA zone the provider expects catchup
+	// start times in; empty derives it from the provider's login response.
+	CatchupProviderTimezone string
 
 	// Error slate configuration: on upstream failure, show the reason on screen
 	// instead of dropping the stream. Requires ffmpeg in the image.
