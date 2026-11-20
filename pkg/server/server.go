@@ -472,9 +472,7 @@ func (c *Config) Serve() error {
 	// Start Discord bot if configured
 	if c.discordBot != nil {
 		utils.InfoLog("Starting Discord bot...")
-		if err := c.discordBot.Start(); err != nil {
-			return fmt.Errorf("failed to start Discord bot: %w", err)
-		}
+		c.discordBot.Start()
 		defer c.discordBot.Stop()
 	}
 
