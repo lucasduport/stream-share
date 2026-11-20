@@ -130,7 +130,7 @@ func (c *Config) setupInternalAPI(r *gin.Engine) {
 				"time":          time.Now().String(),
 				"db_connected":  c.db != nil,
 				"session_mgr":   c.sessionManager != nil,
-				"discord_ready": c.discordBot != nil,
+				"discord_ready": c.discordBot != nil && c.discordBot.Connected(),
 			},
 		})
 	})
