@@ -97,9 +97,6 @@ func (b *Bot) Start() error {
 		}
 		return "global"
 	}())
-	if err := b.cleanupExistingCommands(); err != nil {
-		utils.WarnLog("Failed to cleanup existing commands: %v", err)
-	}
 	if err := b.registerSlashCommands(); err != nil {
 		utils.ErrorLog("Failed to register slash commands: %v", err)
 	}
@@ -113,10 +110,7 @@ func (b *Bot) Start() error {
 func (b *Bot) Stop() {
 	utils.InfoLog("Stopping Discord bot")
 	close(b.stopChan)
-	// Attempt to delete commands (guild-scoped for fast iteration)
-	if err := b.unregisterSlashCommands(); err != nil {
-		utils.WarnLog("Failed to unregister slash commands: %v", err)
-	}
+	// shortcut: Close can block on an in-flight Open (up to the 45s handshake timeout); fine, Stop only runs just before process exit.
 	_ = b.session.Close()
 }
 

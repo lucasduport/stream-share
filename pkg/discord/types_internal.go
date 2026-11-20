@@ -53,8 +53,7 @@ type Bot struct {
 	retryLock    sync.RWMutex
 
 	// Slash commands
-	devGuildID         string
-	registeredCommands []*discordgo.ApplicationCommand
+	devGuildID string
 }
 
 // Context for component-based VOD selection (dropdown + buttons)
