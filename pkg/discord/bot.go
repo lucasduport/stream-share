@@ -84,26 +84,27 @@ func NewBot(token, adminRoleID, apiURL, apiKey string) (*Bot, error) {
 	return bot, nil
 }
 
-// Start starts the Discord bot
-func (b *Bot) Start() error {
+// Start connects to Discord in the background so it never delays the HTTP server.
+func (b *Bot) Start() {
 	utils.InfoLog("Starting Discord bot with intents: Guilds, GuildMessages, DirectMessages, MessageContent, Reactions")
-	if err := b.session.Open(); err != nil {
-		return err
-	}
-	// Register slash commands once here to avoid duplicate registrations on reconnects
-	utils.InfoLog("Slash commands: registering %s-scoped commands…", func() string {
-		if b.devGuildID != "" {
-			return "guild"
+	go func() {
+		if !connectWithRetry(b.session.Open, b.stopChan, connectRetryMin) {
+			return
 		}
-		return "global"
-	}())
-	if err := b.registerSlashCommands(); err != nil {
-		utils.ErrorLog("Failed to register slash commands: %v", err)
-	}
-	if b.devGuildID == "" {
-		utils.WarnLog("Slash commands registered globally; this can take up to 1 hour to appear. Set DISCORD_DEV_GUILD_ID to register instantly in a guild during development.")
-	}
-	return nil
+		// Register slash commands once here to avoid duplicate registrations on reconnects
+		utils.InfoLog("Slash commands: registering %s-scoped commands…", func() string {
+			if b.devGuildID != "" {
+				return "guild"
+			}
+			return "global"
+		}())
+		if err := b.registerSlashCommands(); err != nil {
+			utils.ErrorLog("Failed to register slash commands: %v", err)
+		}
+		if b.devGuildID == "" {
+			utils.WarnLog("Slash commands registered globally; this can take up to 1 hour to appear. Set DISCORD_DEV_GUILD_ID to register instantly in a guild during development.")
+		}
+	}()
 }
 
 // Stop stops the Discord bot and its background goroutines.
