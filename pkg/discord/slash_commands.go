@@ -159,6 +159,15 @@ func (b *Bot) registerSlashCommands() error {
 		names = append(names, c.Name)
 	}
 	utils.InfoLog("Slash commands registered (%s): %v", scope, names)
+	// Only in auto-guild mode: with other guilds present, global commands may still be in use.
+	if len(b.session.State.Guilds) == 1 && guildID == b.session.State.Guilds[0].ID {
+		// Empty non-nil slice so the body is [] rather than null.
+		if _, err := b.session.ApplicationCommandBulkOverwrite(appID, "", []*discordgo.ApplicationCommand{}); err != nil {
+			utils.WarnLog("Slash commands: could not clear global commands: %v", err)
+		} else {
+			utils.InfoLog("Slash commands: cleared global commands (bot is in one guild)")
+		}
+	}
 	return nil
 }
 
