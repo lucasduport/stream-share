@@ -150,7 +150,6 @@ func (b *Bot) registerSlashCommands() error {
 	if err != nil {
 		return fmt.Errorf("bulk overwrite: %w", err)
 	}
-	b.registeredCommands = cmds
 	scope := "global"
 	if guildID != "" {
 		scope = "guild:" + guildID
@@ -160,54 +159,6 @@ func (b *Bot) registerSlashCommands() error {
 		names = append(names, c.Name)
 	}
 	utils.InfoLog("Slash commands registered (%s): %v", scope, names)
-	return nil
-}
-
-// unregisterSlashCommands removes commands from dev guild (fast). Global deletions are slow, so skip if global.
-func (b *Bot) unregisterSlashCommands() error {
-	if b.session == nil || len(b.registeredCommands) == 0 {
-		return nil
-	}
-	if b.devGuildID == "" {
-		return nil
-	}
-	if b.session.State == nil || b.session.State.User == nil {
-		return nil
-	}
-	appID := b.session.State.User.ID
-	for _, cmd := range b.registeredCommands {
-		_ = b.session.ApplicationCommandDelete(appID, b.devGuildID, cmd.ID)
-	}
-	b.registeredCommands = nil
-	return nil
-}
-
-// cleanupExistingCommands deletes commands in the scope we plan to use before re-registering.
-func (b *Bot) cleanupExistingCommands() error {
-	if b.session == nil || b.session.State == nil || b.session.State.User == nil {
-		return nil
-	}
-	appID := b.session.State.User.ID
-	guildID := b.devGuildID
-	// If no dev guild set but only one guild present, use it (consistent with registration decision)
-	if guildID == "" && b.session.State != nil && len(b.session.State.Guilds) == 1 {
-		guildID = b.session.State.Guilds[0].ID
-	}
-	// Clean only in the chosen scope to avoid accidentally wiping global commands when dev is intended
-	cmds, err := b.session.ApplicationCommands(appID, guildID)
-	if err != nil {
-		return err
-	}
-	for _, c := range cmds {
-		if err := b.session.ApplicationCommandDelete(appID, guildID, c.ID); err != nil {
-			utils.WarnLog("Failed to delete command %s in scope %s: %v", c.Name, func() string {
-				if guildID != "" {
-					return guildID
-				}
-				return "global"
-			}(), err)
-		}
-	}
 	return nil
 }
 
