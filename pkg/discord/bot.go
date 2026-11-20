@@ -91,6 +91,13 @@ func (b *Bot) Start() {
 		if !connectWithRetry(b.session.Open, b.stopChan, connectRetryMin) {
 			return
 		}
+		// Stop() may have run while Open was in flight; don't register commands on a stopped bot.
+		select {
+		case <-b.stopChan:
+			_ = b.session.Close()
+			return
+		default:
+		}
 		// Register slash commands once here to avoid duplicate registrations on reconnects
 		utils.InfoLog("Slash commands: registering %s-scoped commands…", func() string {
 			if b.devGuildID != "" {
