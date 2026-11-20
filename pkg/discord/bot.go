@@ -70,7 +70,10 @@ func NewBot(token, adminRoleID, apiURL, apiKey string) (*Bot, error) {
 		} else {
 			utils.InfoLog("Discord ready: session state not populated yet")
 		}
+		bot.connected.Store(true)
 	})
+	dg.AddHandler(func(*discordgo.Session, *discordgo.Resumed) { bot.connected.Store(true) })
+	dg.AddHandler(func(*discordgo.Session, *discordgo.Disconnect) { bot.connected.Store(false) })
 
 	// Intents: messages, DMs, message content
 	dg.Identify.Intents = discordgo.IntentGuilds |
@@ -113,6 +116,11 @@ func (b *Bot) Start() {
 		}
 	}()
 }
+
+// Connected reports whether the gateway connection is up. Start() returns
+// before connecting, so a configured bot is not necessarily a connected one.
+// Lock-free: the session lock is held for a whole connect attempt.
+func (b *Bot) Connected() bool { return b.connected.Load() }
 
 // Stop stops the Discord bot and its background goroutines.
 func (b *Bot) Stop() {

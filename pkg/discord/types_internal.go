@@ -21,6 +21,7 @@ package discord
 import (
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -39,6 +40,7 @@ type Bot struct {
 
 	cleanupInterval time.Duration
 	stopChan        chan struct{} // closed by Stop() to terminate background goroutines
+	connected       atomic.Bool   // gateway up; set by Ready/Resumed, cleared by Disconnect
 
 	// Component-based selection contexts
 	pendingVODSelect map[string]*vodSelectContext // messageID -> selection context
