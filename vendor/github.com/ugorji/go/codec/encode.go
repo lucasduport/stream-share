@@ -893,6 +893,7 @@ func (e *Encoder) kMapCanonical(ti *typeInfo, rv, rvv reflect.Value, keyFn, valF
 				v := &mksbv[i]
 				l := len(mksv)
 
+				e.c = containerMapKey
 				e.encodeValue(k, nil)
 				e.atEndOfEncode()
 				e.w().end()
@@ -981,6 +982,10 @@ func NewEncoderBytes(out *[]byte, h Handle) *Encoder {
 		e.ResetBytes(out)
 	}
 	return e
+}
+
+func (e *Encoder) HandleName() string {
+	return e.hh.Name()
 }
 
 func (e *Encoder) init(h Handle) {
@@ -1149,12 +1154,9 @@ func (e *Encoder) MustEncode(v interface{}) {
 	}
 }
 
-// Release releases shared (pooled) resources.
+// Release is a no-op.
 //
-// It is important to call Release() when done with an Encoder, so those resources
-// are released instantly for use by subsequently created Encoders.
-//
-// Deprecated: Release is a no-op as pooled resources are not used with an Encoder.
+// Deprecated: Pooled resources are not used with an Encoder.
 // This method is kept for compatibility reasons only.
 func (e *Encoder) Release() {
 }

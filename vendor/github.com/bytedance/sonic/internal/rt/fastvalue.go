@@ -22,12 +22,21 @@ import (
 )
 
 var (
-	reflectRtypeItab = findReflectRtypeItab()
+    reflectRtypeItab = findReflectRtypeItab()
 )
 
+// GoType.KindFlags const
 const (
     F_direct    = 1 << 5
     F_kind_mask = (1 << 5) - 1
+)
+
+// GoType.Flags const
+const (
+    tflagUncommon      uint8 = 1 << 0
+    tflagExtraStar     uint8 = 1 << 1
+    tflagNamed         uint8 = 1 << 2
+    tflagRegularMemory uint8 = 1 << 3
 )
 
 type GoType struct {
@@ -42,6 +51,10 @@ type GoType struct {
     GCData     *byte
     Str        int32
     PtrToSelf  int32
+}
+
+func (self *GoType) IsNamed() bool {
+    return (self.Flags & tflagNamed) != 0
 }
 
 func (self *GoType) Kind() reflect.Kind {
@@ -198,3 +211,24 @@ func findReflectRtypeItab() *GoItab {
     v := reflect.TypeOf(struct{}{})
     return (*GoIface)(unsafe.Pointer(&v)).Itab
 }
+
+func AssertI2I2(t *GoType, i GoIface) (r GoIface) {
+    inter := IfaceType(t)
+	tab := i.Itab
+	if tab == nil {
+		return
+	}
+	if (*GoInterfaceType)(tab.it) != inter {
+		tab = Getitab(inter, tab.Vt, true)
+		if tab == nil {
+			return
+		}
+	}
+	r.Itab = tab
+	r.Value = i.Value
+	return
+}
+
+//go:noescape
+//go:linkname Getitab runtime.getitab
+func Getitab(inter *GoInterfaceType, typ *GoType, canfail bool) *GoItab
