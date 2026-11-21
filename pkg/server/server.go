@@ -435,13 +435,13 @@ func (c *Config) Serve() error {
 	// always served from cache instead of waiting on the provider.
 	providerInfoStop := make(chan struct{})
 	c.startProviderInfoRefresher(providerInfoStop)
+	defer close(providerInfoStop)
 
 	// Share links: load them, and cut viewers of links that end or are revoked.
 	c.loadLiveShares()
 	shareSweepStop := make(chan struct{})
 	c.startLiveShareSweeper(shareSweepStop)
 	defer close(shareSweepStop)
-	defer close(providerInfoStop)
 
 	// Drop expired LDAP auth-cache entries so they do not linger for the life of
 	// the process. Only successes are cached, so the map is small either way.
@@ -836,6 +836,9 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	dataChan, exists := c.sessionManager.GetClientChannel(streamID, clientKey)
 	if !exists {
 		utils.ErrorLog("Failed to get client channel for user=%s, %s", username, label)
+		// The registration above has no channel; release the slot instead of
+		// leaking it until the sweep.
+		c.sessionManager.RemoveClient(streamID, username, clientKey)
 		ctx.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
