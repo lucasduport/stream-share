@@ -620,14 +620,14 @@ func (c *Config) addProxyCredentialRoutes(router gin.IRoutes) {
 	router.GET("/timeshift/:username/:password/:duration/:start/:id", c.authWithPathCredentials(), c.xtreamStreamTimeshift)
 
 	// Query-style catchup templates (/streaming/timeshift.php?username=..&stream=..)
-	router.GET("/streaming/timeshift.php", c.xtreamTimeshiftQuery)
+	router.GET("/streaming/timeshift.php", c.timeshiftQueryParams, c.authWithPathCredentials(), c.xtreamStreamTimeshift)
 
 	utils.InfoLog("[stream-share] Routes initialized with direct stream URL support")
 }
 
-// xtreamTimeshiftQuery adapts query-style catchup to the path-style timeshift
-// handler: same credential check and session registration, id = stream.
-func (c *Config) xtreamTimeshiftQuery(ctx *gin.Context) {
+// timeshiftQueryParams adapts query-style catchup to the path-style timeshift
+// handler chain: it maps the query onto the path params (id = stream).
+func (c *Config) timeshiftQueryParams(ctx *gin.Context) {
 	q := ctx.Request.URL.Query()
 	for _, k := range []string{"username", "password", "stream", "start", "duration"} {
 		if q.Get(k) == "" {
@@ -641,10 +641,6 @@ func (c *Config) xtreamTimeshiftQuery(ctx *gin.Context) {
 	}
 	ctx.Params = gin.Params{{Key: "username", Value: q.Get("username")}, {Key: "password", Value: q.Get("password")},
 		{Key: "duration", Value: q.Get("duration")}, {Key: "start", Value: q.Get("start")}, {Key: "id", Value: id}}
-	c.authWithPathCredentials()(ctx)
-	if !ctx.IsAborted() {
-		c.xtreamStreamTimeshift(ctx)
-	}
 }
 
 // Authentication middleware that checks credentials from URL path parameters

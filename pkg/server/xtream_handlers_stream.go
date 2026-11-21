@@ -139,6 +139,14 @@ func (c *Config) xtreamStreamTimeshift(ctx *gin.Context) {
 	start := ctx.Param("start")
 	idRaw := ctx.Param("id")
 
+	// These become provider URL path segments; "/" or ".." would let a viewer
+	// steer the request to another provider endpoint.
+	if !isValidStreamID(duration) || !isValidStreamID(start) || !isValidStreamID(idRaw) {
+		utils.WarnLog("Timeshift: rejected request with invalid path segment")
+		ctx.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+
 	// Proxy upstream if catchup is disabled or the channel has native upstream support.
 	if c.catchupManager == nil || !c.catchupManager.IsEnabled() || c.catchupManager.HasUpstreamCatchup(idRaw) {
 		rpURL, err := url.Parse(fmt.Sprintf("%s/timeshift/%s/%s/%s/%s/%s",
