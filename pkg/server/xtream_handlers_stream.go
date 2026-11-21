@@ -364,19 +364,17 @@ func (c *Config) streamVODWithCache(ctx *gin.Context, basePath, defaultExt strin
 	defer c.registerVODView(c.resolveRequestUsername(ctx), idRaw, basePath, idRaw)()
 
 	if c.VODCacheEnabled && c.db != nil {
-		if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil {
-			if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
-				ct := contentTypeForPath(entry.FilePath)
-				c.touchVODCache(idRaw)
-				// Only the opening read gets an INFO line; seeks are DEBUG.
-				logServe := utils.DebugLog
-				if rng := ctx.GetHeader("Range"); rng == "" || strings.HasPrefix(rng, "bytes=0-") {
-					logServe = utils.InfoLog
-				}
-				logServe("Serving cached %s for %s from %s", basePath, c.vodLabel(idRaw), entry.FilePath)
-				serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
-				return
+		if entry := c.cachedVODEntry(idRaw); entry != nil {
+			ct := contentTypeForPath(entry.FilePath)
+			c.touchVODCache(idRaw)
+			// Only the opening read gets an INFO line; seeks are DEBUG.
+			logServe := utils.DebugLog
+			if rng := ctx.GetHeader("Range"); rng == "" || strings.HasPrefix(rng, "bytes=0-") {
+				logServe = utils.InfoLog
 			}
+			logServe("Serving cached %s for %s from %s", basePath, c.vodLabel(idRaw), entry.FilePath)
+			serveLocalFileRange(ctx, entry.FilePath, ct, "", false)
+			return
 		}
 
 		// Not cached yet: auto-start 7-day caching in the background (or join

@@ -684,7 +684,7 @@ func (c *Config) handleTemporaryLink(ctx *gin.Context) {
 
 	// If cached locally, serve from disk (normalize ID without extension)
 	if c.db != nil && tempLink.StreamID != "" {
-		if entry, err := c.db.GetVODCache(idRaw); err == nil && entry != nil && entry.Status == "ready" {
+		if entry := c.cachedVODEntry(idRaw); entry != nil {
 			utils.InfoLog("Download via cache for %s -> %s", c.vodLabel(tempLink.StreamID), entry.FilePath)
 			ext := strings.ToLower(path.Ext(entry.FilePath))
 			if ext == "" {
@@ -803,15 +803,12 @@ func (c *Config) multiplexedStream(ctx *gin.Context, targetURL *url.URL) {
 	// playback — without it, cached VOD served through the multiplexed path
 	// (e.g. the generic /:user/:pass/:id route) would be invisible.
 	if c.db != nil && (streamType == "movie" || streamType == "series") {
-		if entry, err := c.db.GetVODCache(streamIDRaw); err == nil && entry != nil && entry.Status == "ready" {
-			if fi, statErr := os.Stat(entry.FilePath); statErr == nil && !fi.IsDir() {
-				utils.InfoLog("Multiplex: serving cached %s for %s from %s", streamType, c.streamLabel(streamIDRaw), entry.FilePath)
-				defer c.registerVODView(username, streamIDRaw, streamType, streamTitle)()
-				c.touchVODCache(streamIDRaw)
-				serveLocalFileRange(ctx, entry.FilePath, contentTypeForPath(entry.FilePath), "", false)
-				return
-			}
-			utils.WarnLog("Multiplex: cached %s missing on disk for %s at %s; falling back to upstream", streamType, c.streamLabel(streamIDRaw), entry.FilePath)
+		if entry := c.cachedVODEntry(streamIDRaw); entry != nil {
+			utils.InfoLog("Multiplex: serving cached %s for %s from %s", streamType, c.streamLabel(streamIDRaw), entry.FilePath)
+			defer c.registerVODView(username, streamIDRaw, streamType, streamTitle)()
+			c.touchVODCache(streamIDRaw)
+			serveLocalFileRange(ctx, entry.FilePath, contentTypeForPath(entry.FilePath), "", false)
+			return
 		}
 	}
 
