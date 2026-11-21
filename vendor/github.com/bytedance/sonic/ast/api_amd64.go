@@ -1,5 +1,20 @@
-// +build amd64,go1.15,!go1.21
+// +build amd64,go1.16,!go1.23
 
+/*
+ * Copyright 2022 ByteDance Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 package ast
 
@@ -17,10 +32,12 @@ import (
 
 var typeByte = rt.UnpackEface(byte(0)).Type
 
+//go:nocheckptr
 func quote(buf *[]byte, val string) {
     *buf = append(*buf, '"')
     if len(val) == 0 {
         *buf = append(*buf, '"')
+        return
     }
 
     sp := rt.IndexChar(val, 0)
@@ -70,7 +87,13 @@ func encodeBase64(src []byte) string {
 
 func (self *Parser) decodeValue() (val types.JsonState) {
     sv := (*rt.GoString)(unsafe.Pointer(&self.s))
-    self.p = native.Value(sv.Ptr, sv.Len, self.p, &val, 0)
+    flag := types.F_USE_NUMBER
+    if self.dbuf != nil {
+        flag = 0
+        val.Dbuf = self.dbuf
+        val.Dcap = types.MaxDigitNums
+    }
+    self.p = native.Value(sv.Ptr, sv.Len, self.p, &val, uint64(flag))
     return
 }
 
@@ -99,28 +122,12 @@ func (self *Parser) skipFast() (int, types.ParsingError) {
 }
 
 func (self *Parser) getByPath(path ...interface{}) (int, types.ParsingError) {
-    start := native.GetByPath(&self.s, &self.p, &path)
+    fsm := types.NewStateMachine()
+    start := native.GetByPath(&self.s, &self.p, &path, fsm)
+    types.FreeStateMachine(fsm)
     runtime.KeepAlive(path)
     if start < 0 {
         return self.p, types.ParsingError(-start)
     }
     return start, 0
-}
-
-
-func (self *Searcher) GetByPath(path ...interface{}) (Node, error) {
-    var err types.ParsingError
-    var start int
-
-    self.parser.p = 0
-    start, err = self.parser.getByPath(path...)
-    if err != 0 {
-        return Node{}, self.parser.syntaxError(err)
-    }
-
-    t := switchRawType(self.parser.s[start])
-    if t == _V_NONE {
-        return Node{}, self.parser.ExportError(err)
-    }
-    return newRawNode(self.parser.s[start:self.parser.p], t), nil
 }
