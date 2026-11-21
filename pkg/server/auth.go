@@ -102,14 +102,19 @@ func (c *Config) authenticate(ctx *gin.Context) {
 	}
 
 	// Only use LDAP authentication to validate client access
+	if c.rejectIfThrottled(ctx, authReq.Username) {
+		return
+	}
 	if c.LDAPEnabled {
 		utils.DebugLog("LDAP authentication enabled for user: %s", authReq.Username)
 		ok := c.ldapAuthenticateCached(authReq.Username, authReq.Password)
 		if !ok {
 			utils.DebugLog("LDAP authentication failed for user: %s", authReq.Username)
+			c.noteLoginFailure(authReq.Username, ctx.ClientIP())
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+		c.noteLoginSuccess(authReq.Username)
 		utils.DebugLog("LDAP authentication succeeded for user: %s", authReq.Username)
 		return
 	}
@@ -120,8 +125,11 @@ func (c *Config) authenticate(ctx *gin.Context) {
 	passMatch := subtle.ConstantTimeCompare([]byte(c.Password.String()), []byte(authReq.Password))
 	if userMatch&passMatch != 1 {
 		utils.DebugLog("Local authentication failed for user: %s", authReq.Username)
+		c.noteLoginFailure(authReq.Username, ctx.ClientIP())
 		ctx.AbortWithStatus(http.StatusUnauthorized)
+		return
 	}
+	c.noteLoginSuccess(authReq.Username)
 }
 
 // appAuthenticate validates credentials for application/x-www-form-urlencoded
@@ -146,24 +154,32 @@ func (c *Config) appAuthenticate(ctx *gin.Context) {
 	}
 	log.Printf("[stream-share] %v | %s |App Auth\n", time.Now().Format("2006/01/02 - 15:04:05"), ctx.ClientIP())
 
+	if c.rejectIfThrottled(ctx, q["username"][0]) {
+		return
+	}
+
 	// Use LDAP authentication if enabled
 	if c.LDAPEnabled {
 		utils.DebugLog("LDAP app authentication for user: %s", q["username"][0])
 		ok := c.ldapAuthenticateCached(q["username"][0], q["password"][0])
 		if !ok {
 			utils.DebugLog("LDAP app authentication failed for user: %s", q["username"][0])
+			c.noteLoginFailure(q["username"][0], ctx.ClientIP())
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+		c.noteLoginSuccess(q["username"][0])
 		utils.DebugLog("LDAP app authentication succeeded for user: %s", q["username"][0])
 	} else {
 		userMatch := subtle.ConstantTimeCompare([]byte(c.User.String()), []byte(q["username"][0]))
 		passMatch := subtle.ConstantTimeCompare([]byte(c.Password.String()), []byte(q["password"][0]))
 		if userMatch&passMatch != 1 {
 			utils.DebugLog("Local app authentication failed for user: %s", q["username"][0])
+			c.noteLoginFailure(q["username"][0], ctx.ClientIP())
 			ctx.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
+		c.noteLoginSuccess(q["username"][0])
 	}
 
 	ctx.Request.Body = io.NopCloser(bytes.NewReader(contents))

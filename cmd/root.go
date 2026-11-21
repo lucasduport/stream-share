@@ -146,6 +146,11 @@ It supports:
 			LDAPRequiredGroup:    viper.GetString("ldap-required-group"),
 			LDAPAuthCacheMinutes: viper.GetInt("ldap-auth-cache-minutes"),
 
+			// Login brute-force throttling
+			LoginFailureThreshold:     viper.GetInt("login-failure-threshold"),
+			LoginFailureWindowMinutes: viper.GetInt("login-failure-window-minutes"),
+			LoginLockoutMinutes:       viper.GetInt("login-lockout-minutes"),
+
 			// Reverse proxy / public URL
 			ReverseProxyEnabled: viper.GetBool("reverse-proxy-enabled"),
 			PublicBaseURL:       viper.GetString("public-base-url"),
@@ -289,6 +294,12 @@ func init() {
 	rootCmd.Flags().String("ldap-group-attribute", "memberOf", "LDAP group attribute")
 	rootCmd.Flags().String("ldap-required-group", "iptv", "Required LDAP group")
 	rootCmd.Flags().Int("ldap-auth-cache-minutes", 5, "Cache successful LDAP authentications for this many minutes (0 = re-check the directory on every request)")
+
+	// Login brute-force throttling: every failed authentication counts against
+	// the username and the source IP; usernames lock at the threshold, IPs at 3x.
+	rootCmd.Flags().Int("login-failure-threshold", 10, "Lock a username after this many failed logins within the failure window; a source IP locks at 3x this (0 = disable brute-force throttling)")
+	rootCmd.Flags().Int("login-failure-window-minutes", 10, "Sliding window over which failed logins are counted")
+	rootCmd.Flags().Int("login-lockout-minutes", 15, "How long a locked-out username or source IP stays locked")
 
 	// Reverse proxy / public URL configuration
 	rootCmd.Flags().Bool("reverse-proxy-enabled", false, "Behind a reverse proxy: drop the port in generated public URLs")

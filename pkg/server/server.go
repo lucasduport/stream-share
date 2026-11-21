@@ -290,6 +290,16 @@ func NewServer(config *config.ProxyConfig) (*Config, error) {
 		}
 	}
 
+	// Login throttling state lives in memory, so surface the active policy at
+	// startup the same way as the auth cache.
+	if config.LoginFailureThreshold > 0 {
+		utils.InfoLog("Bootstrap: login throttling ENABLED (a username locks for %d minute(s) after %d failed login(s) in a %d minute window; a source IP at %d)",
+			config.LoginLockoutMinutes, config.LoginFailureThreshold, config.LoginFailureWindowMinutes,
+			config.LoginFailureThreshold*ipThresholdMultiplier)
+	} else {
+		utils.InfoLog("Bootstrap: login throttling DISABLED — failed logins never lock out")
+	}
+
 	// Configure session parameters from configuration. Each setter is only
 	// applied when the value is > 0, leaving the manager defaults otherwise.
 	if serverConfig.sessionManager != nil {

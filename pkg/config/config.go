@@ -97,6 +97,18 @@ type ProxyConfig struct {
 	// 0 disables the cache, so every request re-checks the directory.
 	LDAPAuthCacheMinutes int
 
+	// LoginFailureThreshold locks a username after this many failed logins
+	// within LoginFailureWindowMinutes (a source IP locks at 3x this, since
+	// households legitimately share a public IP). 0 disables brute-force
+	// throttling.
+	LoginFailureThreshold int
+	// LoginFailureWindowMinutes is the sliding window over which failed
+	// logins are counted. 0 uses the built-in default when throttling is on.
+	LoginFailureWindowMinutes int
+	// LoginLockoutMinutes is how long a locked-out username or IP stays
+	// locked. 0 uses the built-in default when throttling is on.
+	LoginLockoutMinutes int
+
 	// Reverse proxy / public URL configuration
 	ReverseProxyEnabled bool
 	PublicBaseURL       string

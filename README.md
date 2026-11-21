@@ -444,6 +444,22 @@ Behavior:
 - Credentials are never stored. The cache key is a keyed hash, salted per process.
 - **The trade-off is revocation latency**: a disabled account or changed password keeps working until its entry expires. Set `LDAP_AUTH_CACHE_MINUTES=0` if revocation must take effect at once.
 
+### Login Brute-Force Throttling
+
+Every failed login counts against the username **and** the source IP. A username locks after `LOGIN_FAILURE_THRESHOLD` failures within the window; a source IP locks at 3x that (households legitimately share one public IP). While locked, authentication attempts answer `429 Too Many Requests` (with `Retry-After`) without touching the directory. Successful logins clear that username's counter.
+
+```
+LOGIN_FAILURE_THRESHOLD=10      # Failed logins before a username locks (default: 10; 0 = disable)
+LOGIN_FAILURE_WINDOW_MINUTES=10 # Sliding window counting failures (default: 10)
+LOGIN_LOCKOUT_MINUTES=15        # How long a lock lasts (default: 15)
+```
+
+Notes:
+- The username counter is the primary guard: rotating IPs does not help an attacker, and capitalization tricks do not either (the bucket is case-folded).
+- The per-IP key relies on the client IP as reported by your proxy chain, which is a dampener, not a hard guarantee.
+- If the directory is unreachable, attempts still count as failures (fail closed), so usernames can end up briefly locked after an outage.
+- State is in-memory: locks reset on process restart, and the map is swept opportunistically to stay bounded.
+
 ### Direct Stream URLs
 
 StreamShare supports direct stream URLs with proxy authentication in the path:
